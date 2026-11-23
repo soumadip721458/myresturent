@@ -1,0 +1,6 @@
+{
+  "name": "রয়েল বিরিয়ানি ও ফাস্ট ফুড — Royal Biryani & Fast Food",
+  "description": "রয়েল বিরিয়ানি ও ফাস্ট ফুড-এর ডিজিটাল মেনু, স্পিন অ্যান্ড উইন অফার এবং দ্রুত হোয়াটসঅ্যাপ ফুড অর্ডারিং অ্যাপ।",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
