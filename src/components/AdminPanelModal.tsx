@@ -5,6 +5,7 @@ import {
   Lock,
   Pencil,
   Plus,
+  QrCode,
   RotateCcw,
   Store,
   Trash2,
@@ -12,9 +13,17 @@ import {
   X,
 } from 'lucide-react';
 import { DEFAULT_MENU, DEFAULT_SHOP_CONFIG } from '../data/defaults';
-import type { Dish, DishBadge, DishCategory, ShopConfig } from '../types';
+import type {
+  Dish,
+  DishBadge,
+  DishCategory,
+  ExtraChargeType,
+  ShopConfig,
+} from '../types';
 import { compressImageFile, formatRupees } from '../utils/bengali';
+import { formatServiceChargeLabel } from '../utils/pricing';
 import { FoodImage } from './FoodImage';
+import { TableQrCard } from './TableQrCard';
 
 // Developer-only master Admin PIN. Edit this constant directly in source code to change the PIN.
 const DEVELOPER_ADMIN_PIN = '2026';
@@ -29,7 +38,7 @@ interface AdminPanelModalProps {
   onNotify: (message: string) => void;
 }
 
-type AdminTab = 'shop' | 'menu';
+type AdminTab = 'shop' | 'menu' | 'qr';
 
 interface DishFormState {
   id: string | null;
@@ -118,6 +127,7 @@ export function AdminPanelModal({
 
   const handleSaveShopClick = (e: React.FormEvent) => {
     e.preventDefault();
+    const numericCharge = Number(shopDraft.serviceChargeValue);
     const cleanedShop: ShopConfig = {
       name: shopDraft.name.trim() || DEFAULT_SHOP_CONFIG.name,
       address: shopDraft.address.trim() || DEFAULT_SHOP_CONFIG.address,
@@ -127,9 +137,21 @@ export function AdminPanelModal({
         shopDraft.whatsappNumber.replace(/\D/g, '') ||
         DEFAULT_SHOP_CONFIG.whatsappNumber,
       heroImage: shopDraft.heroImage.trim() || DEFAULT_SHOP_CONFIG.heroImage,
+      serviceChargeEnabled: Boolean(shopDraft.serviceChargeEnabled),
+      serviceChargeType: shopDraft.serviceChargeType,
+      serviceChargeValue:
+        Number.isFinite(numericCharge) && numericCharge >= 0
+          ? numericCharge
+          : DEFAULT_SHOP_CONFIG.serviceChargeValue,
+      serviceChargeLabel:
+        shopDraft.serviceChargeLabel.trim() ||
+        DEFAULT_SHOP_CONFIG.serviceChargeLabel,
+      deliveryRadiusText:
+        shopDraft.deliveryRadiusText.trim() ||
+        DEFAULT_SHOP_CONFIG.deliveryRadiusText,
     };
     onSaveShop(cleanedShop);
-    onNotify('দোকানের তথ্য ও ছবি সফলভাবে সেভ হয়েছে!');
+    onNotify('দোকানের তথ্য ও চার্জ সেটিংস সফলভাবে সেভ হয়েছে!');
   };
 
   const handleResetDefaults = () => {
@@ -234,7 +256,7 @@ export function AdminPanelModal({
       aria-labelledby="admin-modal-title"
       className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-[#1d1e2c]/80 backdrop-blur-sm"
     >
-      <div className="w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden border border-black/10 max-h-[92vh] flex flex-col">
+      <div className="w-full max-w-2xl bg-white dark:bg-[#1a1b26] rounded-3xl shadow-2xl overflow-hidden border border-black/10 dark:border-white/10 max-h-[92vh] flex flex-col text-[#1d1e2c] dark:text-slate-100">
         {/* Header */}
         <div className="bg-[#1d1e2c] text-white px-5 py-4 flex items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2.5">
@@ -267,10 +289,10 @@ export function AdminPanelModal({
         {!unlocked ? (
           <form onSubmit={handleUnlock} className="p-6 sm:p-8 max-w-sm mx-auto w-full">
             <div className="text-center mb-5">
-              <div className="w-14 h-14 mx-auto rounded-2xl bg-[#f4f5f7] text-[#1d1e2c] flex items-center justify-center mb-3">
-                <Lock className="w-7 h-7 text-[#d90429]" />
+              <div className="w-14 h-14 mx-auto rounded-2xl bg-[#f4f5f7] dark:bg-[#141520] text-[#1d1e2c] dark:text-slate-100 flex items-center justify-center mb-3">
+                <Lock className="w-7 h-7 text-[#d90429] dark:text-[#ff6b81]" />
               </div>
-              <h3 className="text-lg font-bold text-[#1d1e2c]">
+              <h3 className="text-lg font-bold text-[#1d1e2c] dark:text-slate-100">
                 অ্যাডমিন পিন প্রবেশ করান
               </h3>
             </div>
@@ -286,7 +308,7 @@ export function AdminPanelModal({
               }}
               placeholder="পিন লিখুন"
               autoFocus
-              className="w-full min-h-[48px] text-center tracking-[0.35em] font-bold text-lg rounded-xl border border-slate-300 bg-[#f9fafb] focus:bg-white focus:border-[#d90429] focus:outline-none focus:ring-2 focus:ring-[#d90429]/20"
+              className="w-full min-h-[48px] text-center tracking-[0.35em] font-bold text-lg rounded-xl border border-slate-300 dark:border-white/15 bg-[#f9fafb] dark:bg-[#141520] text-[#1d1e2c] dark:text-white focus:bg-white dark:focus:bg-[#181926] focus:border-[#d90429] focus:outline-none focus:ring-2 focus:ring-[#d90429]/20"
             />
 
             {pinError && (
@@ -305,14 +327,14 @@ export function AdminPanelModal({
         ) : (
           <>
             {/* Admin Section Tabs */}
-            <div className="bg-[#f4f5f7] px-4 py-2.5 border-b border-slate-200 flex items-center gap-2 overflow-x-auto no-scrollbar shrink-0">
+            <div className="bg-[#f4f5f7] dark:bg-[#141520] px-4 py-2.5 border-b border-slate-200 dark:border-white/10 flex items-center gap-2 overflow-x-auto no-scrollbar shrink-0">
               <button
                 type="button"
                 onClick={() => setActiveTab('shop')}
                 className={`min-h-[42px] px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap shrink-0 flex items-center gap-1.5 transition-all cursor-pointer ${
                   activeTab === 'shop'
-                    ? 'bg-[#1d1e2c] text-white shadow-sm'
-                    : 'bg-white text-[#1d1e2c] border border-slate-200 hover:bg-slate-50'
+                    ? 'bg-[#1d1e2c] dark:bg-[#ff9f1c] text-white dark:text-[#1d1e2c] shadow-sm'
+                    : 'bg-white dark:bg-[#1a1b26] text-[#1d1e2c] dark:text-slate-200 border border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-[#232436]'
                 }`}
               >
                 <Store className="w-4 h-4" />
@@ -324,18 +346,33 @@ export function AdminPanelModal({
                 onClick={() => setActiveTab('menu')}
                 className={`min-h-[42px] px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap shrink-0 flex items-center gap-1.5 transition-all cursor-pointer ${
                   activeTab === 'menu'
-                    ? 'bg-[#1d1e2c] text-white shadow-sm'
-                    : 'bg-white text-[#1d1e2c] border border-slate-200 hover:bg-slate-50'
+                    ? 'bg-[#1d1e2c] dark:bg-[#ff9f1c] text-white dark:text-[#1d1e2c] shadow-sm'
+                    : 'bg-white dark:bg-[#1a1b26] text-[#1d1e2c] dark:text-slate-200 border border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-[#232436]'
                 }`}
               >
                 <UtensilsCrossed className="w-4 h-4" />
                 <span>🍽️ মেনু ও খাবারের ছবি ম্যানেজ</span>
               </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab('qr')}
+                className={`min-h-[42px] px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap shrink-0 flex items-center gap-1.5 transition-all cursor-pointer ${
+                  activeTab === 'qr'
+                    ? 'bg-[#d90429] text-white shadow-sm'
+                    : 'bg-white dark:bg-[#1a1b26] text-[#1d1e2c] dark:text-slate-200 border border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-[#232436]'
+                }`}
+              >
+                <QrCode className="w-4 h-4" />
+                <span>📲 দোকানের QR কোড (Table QR)</span>
+              </button>
             </div>
 
-            {/* Scrollable Body */}
-            <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-6">
-              {activeTab === 'shop' ? (
+            {/* Scrollable Body — light-surface inner workspace ensures crisp print preview & form legibility */}
+            <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-6 bg-white text-[#1d1e2c]">
+              {activeTab === 'qr' ? (
+                <TableQrCard shop={shop} onNotify={onNotify} />
+              ) : activeTab === 'shop' ? (
                 <form onSubmit={handleSaveShopClick} className="space-y-4">
                   {/* Hero Image Live Preview + Upload/URL */}
                   <div>
@@ -457,6 +494,181 @@ export function AdminPanelModal({
                         }
                         className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 text-sm bg-[#f9fafb] focus:bg-white focus:border-[#d90429] focus:outline-none"
                       />
+                    </div>
+                  </div>
+
+                  {/* Packaging & GST / Service Charge & Delivery Radius Controls */}
+                  <div className="rounded-2xl bg-[#f4f5f7] border border-slate-200 p-4 space-y-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-[#1d1e2c]">
+                          📦 প্যাকেজিং ও GST / সার্ভিস চার্জ সেটিংস
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          হোম ডেলিভারি সবসময় ফ্রি থাকবে — এখান থেকে প্যাকিং/GST চার্জ কন্ট্রোল করুন
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={shopDraft.serviceChargeEnabled}
+                        onClick={() =>
+                          setShopDraft((prev) => ({
+                            ...prev,
+                            serviceChargeEnabled: !prev.serviceChargeEnabled,
+                          }))
+                        }
+                        className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                          shopDraft.serviceChargeEnabled
+                            ? 'bg-emerald-600'
+                            : 'bg-slate-300'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform ${
+                            shopDraft.serviceChargeEnabled
+                              ? 'translate-x-6'
+                              : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    {shopDraft.serviceChargeEnabled && (
+                      <div className="space-y-3.5 pt-2 border-t border-slate-200/80">
+                        {/* Percentage vs Flat Amount selector */}
+                        <div>
+                          <label className="block text-xs font-semibold text-[#1d1e2c] mb-1.5">
+                            চার্জের ধরন বেছে নিন
+                          </label>
+                          <div className="grid grid-cols-2 gap-2">
+                            {(
+                              [
+                                { id: 'percentage', label: 'শতাংশ (% GST)' },
+                                { id: 'flat', label: 'নির্দিষ্ট টাকা (₹ ফ্ল্যাট)' },
+                              ] as { id: ExtraChargeType; label: string }[]
+                            ).map((option) => {
+                              const active =
+                                shopDraft.serviceChargeType === option.id;
+                              return (
+                                <button
+                                  key={option.id}
+                                  type="button"
+                                  onClick={() =>
+                                    setShopDraft((prev) => ({
+                                      ...prev,
+                                      serviceChargeType: option.id,
+                                      serviceChargeValue:
+                                        option.id === 'percentage'
+                                          ? prev.serviceChargeType === 'flat' &&
+                                            prev.serviceChargeValue > 15
+                                            ? 5
+                                            : prev.serviceChargeValue
+                                          : prev.serviceChargeType ===
+                                              'percentage' &&
+                                            prev.serviceChargeValue <= 10
+                                          ? 20
+                                          : prev.serviceChargeValue,
+                                    }))
+                                  }
+                                  className={`min-h-[40px] px-3 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                                    active
+                                      ? 'bg-[#1d1e2c] text-white shadow-xs'
+                                      : 'bg-white text-[#1d1e2c] border border-slate-200 hover:bg-slate-50'
+                                  }`}
+                                >
+                                  {option.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* Charge Value & Custom Label */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-semibold text-[#1d1e2c] mb-1">
+                              {shopDraft.serviceChargeType === 'percentage'
+                                ? 'শতাংশের হার (%)'
+                                : 'নির্দিষ্ট চার্জ (₹ টাকা)'}
+                            </label>
+                            <input
+                              type="number"
+                              min={0}
+                              max={
+                                shopDraft.serviceChargeType === 'percentage'
+                                  ? 50
+                                  : 500
+                              }
+                              step="1"
+                              value={shopDraft.serviceChargeValue}
+                              onChange={(e) =>
+                                setShopDraft((prev) => ({
+                                  ...prev,
+                                  serviceChargeValue:
+                                    e.target.value === ''
+                                      ? 0
+                                      : Number(e.target.value),
+                                }))
+                              }
+                              className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm font-semibold tabular-nums focus:border-[#d90429] focus:outline-none"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-semibold text-[#1d1e2c] mb-1">
+                              বিলে প্রদর্শিত নাম (Label)
+                            </label>
+                            <input
+                              type="text"
+                              value={shopDraft.serviceChargeLabel}
+                              onChange={(e) =>
+                                setShopDraft((prev) => ({
+                                  ...prev,
+                                  serviceChargeLabel: e.target.value,
+                                }))
+                              }
+                              placeholder="যেমন: প্যাকেজিং ও GST চার্জ"
+                              className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm focus:border-[#d90429] focus:outline-none"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="rounded-xl bg-white border border-slate-200 px-3 py-2 text-xs text-slate-600 flex items-center justify-between gap-2">
+                          <span>বিল প্রিভিউ:</span>
+                          <strong className="text-[#1d1e2c]">
+                            {formatServiceChargeLabel(shopDraft)}
+                            {shopDraft.serviceChargeType === 'flat'
+                              ? ` (${formatRupees(shopDraft.serviceChargeValue)})`
+                              : ''}
+                          </strong>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Serviceable Delivery Radius */}
+                    <div className="pt-2 border-t border-slate-200/80">
+                      <label className="block text-xs font-semibold text-[#1d1e2c] mb-1">
+                        ফ্রি হোম ডেলিভারি দূরত্ব (Serviceable Radius)
+                      </label>
+                      <input
+                        type="text"
+                        value={shopDraft.deliveryRadiusText}
+                        onChange={(e) =>
+                          setShopDraft((prev) => ({
+                            ...prev,
+                            deliveryRadiusText: e.target.value,
+                          }))
+                        }
+                        placeholder="যেমন: ৫ কিমি"
+                        className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm focus:border-[#d90429] focus:outline-none"
+                      />
+                      <p className="mt-1 text-[11px] text-emerald-700 font-medium">
+                        প্রিভিউ: 📍 শুধুমাত্র{' '}
+                        {shopDraft.deliveryRadiusText.trim() || '৫ কিমি'}-এর
+                        মধ্যে হোম ডেলিভারি উপলব্ধ
+                      </p>
                     </div>
                   </div>
 

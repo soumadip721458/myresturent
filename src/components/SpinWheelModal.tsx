@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { CheckCircle2, Gift, Sparkles, X } from 'lucide-react';
 import { SPIN_SLICES } from '../data/defaults';
-import type { SpinPrizeId, SpinSlice } from '../types';
+import type { Language, SpinPrizeId, SpinSlice } from '../types';
+import { getSpinSliceCopy } from '../utils/i18n';
 
 interface SpinWheelModalProps {
   isOpen: boolean;
+  lang: Language;
   onClose: () => void;
   wonPrizeId: SpinPrizeId | null;
   onWin: (prizeId: SpinPrizeId) => void;
@@ -14,7 +16,6 @@ const SLICE_COUNT = SPIN_SLICES.length; // 5
 const SLICE_DEG = 360 / SLICE_COUNT; // 72 deg
 
 function polarToCartesian(cx: number, cy: number, r: number, angleDeg: number) {
-  // 0 deg at 12 o'clock, increasing clockwise
   const rad = ((angleDeg - 90) * Math.PI) / 180;
   return {
     x: cx + r * Math.cos(rad),
@@ -48,6 +49,7 @@ function pickWeightedSliceIndex(): number {
 
 export function SpinWheelModal({
   isOpen,
+  lang,
   onClose,
   wonPrizeId,
   onWin,
@@ -58,8 +60,12 @@ export function SpinWheelModal({
 
   if (!isOpen) return null;
 
+  const isBn = lang === 'bn';
   const activeWonSlice =
     justWonSlice || SPIN_SLICES.find((s) => s.id === wonPrizeId) || null;
+  const activeWonCopy = activeWonSlice
+    ? getSpinSliceCopy(activeWonSlice, lang)
+    : null;
   const alreadyLocked = Boolean(wonPrizeId) && !isSpinning;
 
   const handleSpin = () => {
@@ -69,7 +75,7 @@ export function SpinWheelModal({
     const selectedSlice = SPIN_SLICES[targetIndex];
     const centerAngle = targetIndex * SLICE_DEG + SLICE_DEG / 2;
     const alignRemainder = (360 - centerAngle) % 360;
-    const jitter = (Math.random() - 0.5) * 28; // natural stop inside slice
+    const jitter = (Math.random() - 0.5) * 28;
     const fullTurns = 6 * 360;
     const nextRotation = fullTurns + alignRemainder + jitter;
 
@@ -90,7 +96,7 @@ export function SpinWheelModal({
       aria-labelledby="spin-modal-title"
       className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-[#1d1e2c]/75 backdrop-blur-sm"
     >
-      <div className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden border border-black/10 max-h-[92vh] overflow-y-auto">
+      <div className="relative w-full max-w-md bg-white dark:bg-[#1a1b26] rounded-3xl shadow-2xl overflow-hidden border border-black/10 dark:border-white/10 max-h-[92vh] overflow-y-auto">
         {/* Modal Header */}
         <div className="bg-gradient-to-r from-[#d90429] via-[#b80423] to-[#1d1e2c] px-5 py-4 text-white flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 min-w-0">
@@ -102,10 +108,12 @@ export function SpinWheelModal({
                 id="spin-modal-title"
                 className="text-lg sm:text-xl font-bold leading-tight truncate"
               >
-                চাকা ঘোরান আর জিতে নিন!
+                {isBn ? 'চাকা ঘোরান আর জিতে নিন!' : 'Spin & Win Exciting Rewards!'}
               </h2>
               <p className="text-xs text-white/85">
-                প্রতিদিন ১ বার ফ্রি স্পিন • নিশ্চিত পুরস্কার
+                {isBn
+                  ? 'প্রতিদিন ১ বার ফ্রি স্পিন • নিশ্চিত পুরস্কার'
+                  : '1 Free Spin Every Day • Guaranteed Reward'}
               </p>
             </div>
           </div>
@@ -113,7 +121,7 @@ export function SpinWheelModal({
           <button
             type="button"
             onClick={onClose}
-            aria-label="বন্ধ করুন"
+            aria-label={isBn ? 'বন্ধ করুন' : 'Close'}
             className="w-10 h-10 rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center transition-colors shrink-0 cursor-pointer"
           >
             <X className="w-5 h-5" />
@@ -159,7 +167,8 @@ export function SpinWheelModal({
                   const endAngle = startAngle + SLICE_DEG;
                   const midAngle = startAngle + SLICE_DEG / 2;
                   const labelPos = polarToCartesian(150, 150, 96, midAngle);
-                  const lines = slice.wheelLabel.split('\n');
+                  const copy = getSpinSliceCopy(slice, lang);
+                  const lines = copy.wheelLabel.split('\n');
 
                   return (
                     <g key={slice.id}>
@@ -181,7 +190,7 @@ export function SpinWheelModal({
                             fontSize="9"
                             fontWeight="700"
                           >
-                            ★ মেগা ★
+                            {copy.jackpotTag}
                           </text>
                         )}
                         {lines.map((line, lineIdx) => (
@@ -192,7 +201,7 @@ export function SpinWheelModal({
                             textAnchor="middle"
                             dominantBaseline="middle"
                             fill={slice.textColor}
-                            fontSize="11.5"
+                            fontSize={isBn ? '11.5' : '11'}
                             fontWeight="700"
                           >
                             {line}
@@ -226,29 +235,48 @@ export function SpinWheelModal({
               disabled={isSpinning || alreadyLocked}
               className="absolute z-10 w-16 h-16 rounded-full bg-white text-[#d90429] border-4 border-[#1d1e2c] shadow-lg flex flex-col items-center justify-center font-bold text-xs leading-tight hover:scale-105 active:scale-95 disabled:opacity-90 disabled:cursor-default transition-transform cursor-pointer"
             >
-              <span>{isSpinning ? 'ঘুরছে' : alreadyLocked ? 'জেতা!' : 'ঘোরান'}</span>
+              <span>
+                {isSpinning
+                  ? isBn
+                    ? 'ঘুরছে'
+                    : '...'
+                  : alreadyLocked
+                  ? isBn
+                    ? 'জেতা!'
+                    : 'WON!'
+                  : isBn
+                  ? 'ঘোরান'
+                  : 'SPIN'}
+              </span>
             </button>
           </div>
 
           {/* Result Card or Spin CTA */}
-          {activeWonSlice && !isSpinning ? (
-            <div className="mt-5 rounded-2xl bg-[#fff8eb] border border-[#ff9f1c]/50 p-4 text-center">
-              <div className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 mb-1">
+          {activeWonCopy && !isSpinning ? (
+            <div className="mt-5 rounded-2xl bg-[#fff8eb] dark:bg-[#231d14] border border-[#ff9f1c]/50 dark:border-[#ff9f1c]/40 p-4 text-center">
+              <div className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-400 mb-1">
                 <CheckCircle2 className="w-4 h-4" />
-                <span>অভিনন্দন! আজকের পুরস্কার আনলক হয়েছে</span>
+                <span>
+                  {isBn
+                    ? 'অভিনন্দন! আজকের পুরস্কার আনলক হয়েছে'
+                    : "Congrats! Today's Reward Unlocked"}
+                </span>
               </div>
-              <p className="text-lg font-bold text-[#1d1e2c]">
-                {activeWonSlice.fullLabel}
+              <p className="text-lg font-bold text-[#1d1e2c] dark:text-white">
+                {activeWonCopy.fullLabel}
               </p>
-              <p className="text-xs text-[#1d1e2c]/70 mt-1">
-                {activeWonSlice.conditionText} • অর্ডারের সময় স্বয়ংক্রিয়ভাবে যুক্ত হবে
+              <p className="text-xs text-[#1d1e2c]/70 dark:text-slate-300 mt-1">
+                {activeWonCopy.conditionText} •{' '}
+                {isBn
+                  ? 'অর্ডারের সময় স্বয়ংক্রিয়ভাবে যুক্ত হবে'
+                  : 'Auto-applied at checkout'}
               </p>
               <button
                 type="button"
                 onClick={onClose}
                 className="mt-4 w-full min-h-[46px] rounded-xl bg-[#d90429] hover:bg-[#b30322] active:scale-[0.99] text-white font-bold text-base shadow-md transition-all cursor-pointer"
               >
-                মেনু দেখুন ও অর্ডার করুন ➔
+                {isBn ? 'মেনু দেখুন ও অর্ডার করুন ➔' : 'Explore Menu & Order ➔'}
               </button>
             </div>
           ) : (
@@ -261,11 +289,19 @@ export function SpinWheelModal({
               >
                 <Sparkles className="w-5 h-5 text-[#ffd166]" />
                 <span>
-                  {isSpinning ? 'চাকা ঘুরছে... অপেক্ষা করুন!' : 'এখনই চাকা ঘোরান!'}
+                  {isSpinning
+                    ? isBn
+                      ? 'চাকা ঘুরছে... অপেক্ষা করুন!'
+                      : 'Spinning... Good Luck!'
+                    : isBn
+                    ? 'এখনই চাকা ঘোরান!'
+                    : 'Spin the Wheel Now!'}
                 </span>
               </button>
-              <p className="mt-2.5 text-xs text-slate-500">
-                প্রতিদিন একবার স্পিন করার সুযোগ পাবেন। জিতলে ছাড় সরাসরি বিলে যোগ হবে।
+              <p className="mt-2.5 text-xs text-slate-500 dark:text-slate-400">
+                {isBn
+                  ? 'প্রতিদিন একবার স্পিন করার সুযোগ পাবেন। জিতলে ছাড় সরাসরি বিলে যোগ হবে।'
+                  : '1 free spin per day. Your reward applies automatically to your bill.'}
               </p>
             </div>
           )}

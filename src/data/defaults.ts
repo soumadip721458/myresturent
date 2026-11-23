@@ -1,14 +1,25 @@
-import type { Dish, ShopConfig, SpinSlice } from '../types';
+import type {
+  CustomerReview,
+  Dish,
+  Language,
+  SavedOrder,
+  ShopConfig,
+  SpinSlice,
+} from '../types';
 
 export const STORAGE_KEYS = {
   SHOP: 'royal_biryani_shop_v1',
   MENU: 'royal_biryani_menu_v1',
   SPIN: 'royal_biryani_spin_v1',
   CART: 'royal_biryani_cart_v1',
+  LANG: 'royal_biryani_lang_v1',
+  ORDERS: 'royal_biryani_orders_v1',
+  REVIEWS: 'royal_biryani_reviews_v1',
+  THEME: 'royal_biryani_theme_v1',
 } as const;
 
-export const FREE_DELIVERY_THRESHOLD = 199;
-export const STANDARD_DELIVERY_CHARGE = 49;
+export const BASE_HISTORICAL_REVIEW_COUNT = 124;
+export const BASE_HISTORICAL_RATING_SUM = 607.6; // 124 * 4.9 => starts at 4.9 across 128 reviews with 4 seed cards
 
 export const DEFAULT_SHOP_CONFIG: ShopConfig = {
   name: 'রয়েল বিরিয়ানি ও ফাস্ট ফুড',
@@ -18,17 +29,25 @@ export const DEFAULT_SHOP_CONFIG: ShopConfig = {
   whatsappNumber: '918649853354',
   heroImage:
     'https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?auto=format&fit=crop&w=1400&q=85',
+  serviceChargeEnabled: true,
+  serviceChargeType: 'percentage',
+  serviceChargeValue: 5,
+  serviceChargeLabel: 'প্যাকেজিং ও GST চার্জ',
+  deliveryRadiusText: '৫ কিমি',
 };
 
 export const DEFAULT_MENU: Dish[] = [
   {
     id: 'special-chicken-biryani',
     name: 'স্পেশাল চিকেন বিরিয়ানি',
+    nameEn: 'Special Chicken Biryani',
     category: 'biryani',
     price: 130,
     oldPrice: 160,
     description:
       'সুগন্ধি দেরাদুন বাসমতি চাল, রসালো বড় চিকেন পিস ও কলকাতা স্পেশাল আলু দিয়ে দমে রান্না।',
+    descriptionEn:
+      'Fragrant Dehradun basmati rice slow-cooked on dum with tender chicken leg and signature Kolkata spiced potato.',
     image:
       'https://images.unsplash.com/photo-1633945274405-b6c8069047b0?auto=format&fit=crop&w=800&q=80',
     badge: '🔥 বেস্টসেলার',
@@ -36,11 +55,14 @@ export const DEFAULT_MENU: Dish[] = [
   {
     id: 'shahi-mutton-biryani',
     name: 'শাহী মাটন বিরিয়ানি',
+    nameEn: 'Shahi Mutton Biryani',
     category: 'biryani',
     price: 190,
     oldPrice: 230,
     description:
       'নরম রেওয়াজি খাসির মাংস, কেশর, ঘি ও শাহী মশলার অতুলনীয় সুবাসে তৈরি স্পেশাল বিরিয়ানি।',
+    descriptionEn:
+      'Melt-in-the-mouth slow-cooked mutton, saffron strands, pure ghee, and royal aromatic spices.',
     image:
       'https://images.unsplash.com/photo-1589302168068-964664d93dc0?auto=format&fit=crop&w=800&q=80',
     badge: '⭐ শেফ স্পেশাল',
@@ -48,11 +70,14 @@ export const DEFAULT_MENU: Dish[] = [
   {
     id: 'egg-chicken-biryani',
     name: 'এগ চিকেন বিরিয়ানি',
+    nameEn: 'Egg Chicken Biryani',
     category: 'biryani',
     price: 150,
     oldPrice: 180,
     description:
       'স্পেশাল চিকেন বিরিয়ানির সাথে ১টি গোটা সেদ্ধ ডিম, নরম আলু ও বেরেস্তার দারুণ কম্বো।',
+    descriptionEn:
+      'Our classic Chicken Biryani upgraded with a whole boiled egg, golden potato, and crispy birista.',
     image:
       'https://images.unsplash.com/photo-1642821373181-696a54913e93?auto=format&fit=crop&w=800&q=80',
     badge: '🔥 বেস্টসেলার',
@@ -60,11 +85,14 @@ export const DEFAULT_MENU: Dish[] = [
   {
     id: 'egg-chicken-chowmein',
     name: 'এগ চিকেন চাউমিন',
+    nameEn: 'Egg Chicken Chowmein',
     category: 'fastfood',
     price: 70,
     oldPrice: 90,
     description:
       'হাই-ফ্লেমে ভাজা হাক্কা নুডলস, কুচানো চিকেন, ভাজা ডিম ও তাজা সবজির স্ট্রিট-স্টাইল স্বাদ।',
+    descriptionEn:
+      'High-flame wok-tossed Hakka noodles loaded with shredded chicken, scrambled egg, and crunchy veggies.',
     image:
       'https://images.unsplash.com/photo-1585032226651-759b368d7246?auto=format&fit=crop&w=800&q=80',
     badge: '🔥 বেস্টসেলার',
@@ -72,11 +100,14 @@ export const DEFAULT_MENU: Dish[] = [
   {
     id: 'double-egg-chicken-roll',
     name: 'ডাবল এগ চিকেন রোল',
+    nameEn: 'Double Egg Chicken Roll',
     category: 'fastfood',
     price: 65,
     oldPrice: 80,
     description:
       'মচমচে লাচ্ছা পরোটায় ডাবল ডিম, জুসি চিকেন টিক্কা, কাঁচা পেঁয়াজ, চাট মশলা ও লেবুর রস।',
+    descriptionEn:
+      'Flaky laccha paratha layered with double egg, juicy chicken tikka, sliced onions, chaat masala, and fresh lime.',
     image:
       'https://images.unsplash.com/photo-1626700051175-6818013e1d4f?auto=format&fit=crop&w=800&q=80',
     badge: '⭐ শেফ স্পেশাল',
@@ -84,11 +115,14 @@ export const DEFAULT_MENU: Dish[] = [
   {
     id: 'mixed-chowmein',
     name: 'মিক্সড চাউমিন',
+    nameEn: 'Special Mixed Chowmein',
     category: 'fastfood',
     price: 90,
     oldPrice: 115,
     description:
       'চিকেন, কুচো চিংড়ি, ডিম ও স্পেশাল চিলি সসে ভরপুর আমাদের দারুণ টেস্টি মিক্সড চাউমিন।',
+    descriptionEn:
+      'Signature wok-fried noodles generously packed with juicy chicken, baby prawns, egg, and house chili glaze.',
     image:
       'https://images.unsplash.com/photo-1617093727343-374698b1b08d?auto=format&fit=crop&w=800&q=80',
     badge: '',
@@ -188,5 +222,105 @@ export function loadMenuDishes(): Dish[] {
     return DEFAULT_MENU;
   } catch {
     return DEFAULT_MENU;
+  }
+}
+
+export const DEFAULT_REVIEWS: CustomerReview[] = [
+  {
+    id: 'seed-rev-1',
+    name: 'অরিন্দম চক্রবর্তী',
+    nameEn: 'Arindam Chakraborty',
+    rating: 5,
+    comment:
+      'বিরিয়ানির স্বাদ অসাধারণ, একদম গরম গরম ডেলিভারি পেয়েছি! চিকেনের পিস আর আলু দুটোই দারুণ ছিল।',
+    commentEn:
+      'Amazing biryani taste and delivered piping hot! Both the chicken piece and Kolkata potato were top-notch.',
+    createdAt: '2026-11-20T14:30:00.000Z',
+    dateLabelBn: '২ দিন আগে',
+    dateLabelEn: '2 days ago',
+  },
+  {
+    id: 'seed-rev-2',
+    name: 'মৌমিতা দাস',
+    nameEn: 'Moumita Das',
+    rating: 5,
+    comment:
+      'শাহী মাটন বিরিয়ানি আর ডাবল এগ চিকেন রোল অর্ডার করেছিলাম। প্যাকিং খুব সুন্দর আর ফ্রি ডেলিভারি দারুণ লেগেছে।',
+    commentEn:
+      'Ordered Shahi Mutton Biryani and Double Egg Chicken Roll. Very neat packaging and loved the free home delivery.',
+    createdAt: '2026-11-18T19:15:00.000Z',
+    dateLabelBn: '৪ দিন আগে',
+    dateLabelEn: '4 days ago',
+  },
+  {
+    id: 'seed-rev-3',
+    name: 'শুভজিৎ মণ্ডল',
+    nameEn: 'Subhajit Mondal',
+    rating: 5,
+    comment:
+      'স্পিন হুইলে ১০% ছাড় জিতেছিলাম, সরাসরি বিলে ছাড় পেয়ে গেছি! ২৫ মিনিটের মধ্যে বাড়িতে খাবার পৌঁছে গেছে।',
+    commentEn:
+      'Won 10% OFF on the spin wheel and got instant discount on the bill! Delivered to my doorstep in 25 minutes.',
+    createdAt: '2026-11-15T13:05:00.000Z',
+    dateLabelBn: '১ সপ্তাহ আগে',
+    dateLabelEn: '1 week ago',
+  },
+  {
+    id: 'seed-rev-4',
+    name: 'সৌমেন পাল',
+    nameEn: 'Soumen Pal',
+    rating: 4,
+    comment:
+      'মিক্সড চাউমিন আর এগ চিকেন বিরিয়ানি দুটোই খুব টেস্টি ছিল। পরিমাণও বেশ ভালো।',
+    commentEn:
+      'Both Mixed Chowmein and Egg Chicken Biryani were super tasty with generous portion sizes.',
+    createdAt: '2026-11-12T20:40:00.000Z',
+    dateLabelBn: '১ সপ্তাহ আগে',
+    dateLabelEn: '1 week ago',
+  },
+];
+
+export function loadLanguage(): Language {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEYS.LANG);
+    return saved === 'en' ? 'en' : 'bn';
+  } catch {
+    return 'bn';
+  }
+}
+
+export function loadSavedOrders(): SavedOrder[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.ORDERS);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.slice(0, 3) as SavedOrder[];
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+export function loadCustomerReviews(): CustomerReview[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.REVIEWS);
+    if (!raw) return DEFAULT_REVIEWS;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed as CustomerReview[];
+    }
+    return DEFAULT_REVIEWS;
+  } catch {
+    return DEFAULT_REVIEWS;
+  }
+}
+
+export function loadDarkMode(): boolean {
+  try {
+    return localStorage.getItem(STORAGE_KEYS.THEME) === 'dark';
+  } catch {
+    return false;
   }
 }
