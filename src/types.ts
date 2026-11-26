@@ -17,6 +17,7 @@ export interface Dish {
   descriptionEn?: string;
   image: string;
   badge?: DishBadge;
+  inStock?: boolean;
 }
 
 export type ExtraChargeType = 'percentage' | 'flat';
@@ -33,6 +34,9 @@ export interface ShopConfig {
   serviceChargeValue: number;
   serviceChargeLabel: string;
   deliveryRadiusText: string;
+  shopLat: number;
+  shopLng: number;
+  maxDeliveryKm: number;
 }
 
 export type SpinPrizeId =
@@ -59,10 +63,17 @@ export interface SavedSpinRecord {
   prizeId: SpinPrizeId;
 }
 
+export interface CustomerLocation {
+  lat: number;
+  lng: number;
+  distanceKm: number;
+}
+
 export interface CustomerDetails {
   name: string;
   phone: string;
   address: string;
+  location?: CustomerLocation | null;
 }
 
 export interface OrderPricing {
@@ -107,4 +118,49 @@ export interface CustomerReview {
   createdAt: string;
   dateLabelBn?: string;
   dateLabelEn?: string;
+}
+
+export interface DeveloperControlConfig {
+  serviceActive: boolean;
+  subscriptionExpiry: string; // YYYY-MM-DD
+  developerBrandName: string;
+  developerWhatsapp: string;
+}
+
+export interface ShopTenantDocument {
+  shopId: string;
+  shopConfig: ShopConfig;
+  menuItems: Dish[];
+  spinRewards: SpinSlice[];
+  developerControl: DeveloperControlConfig;
+}
+
+export type CloudSyncStatus = 'local-fallback' | 'connecting' | 'synced' | 'error';
+
+export type OrderStatus = 'Pending' | 'Confirmed' | 'Delivered' | 'Cancelled';
+
+export interface CloudOrderItem {
+  dishId: string;
+  name: string;
+  nameEn?: string;
+  qty: number;
+  unitPrice: number;
+  lineTotal: number;
+}
+
+export interface CloudOrder {
+  docId: string;
+  orderId: string; // e.g., #ORD-1042
+  shopId: string;
+  timestampMs: number;
+  customerName: string;
+  customerPhone: string;
+  address: string;
+  distanceKm: number | null;
+  googleMapsUrl: string;
+  items: CloudOrderItem[];
+  finalTotal: number;
+  spinReward: string;
+  status: OrderStatus;
+  source: 'cloud' | 'local';
 }

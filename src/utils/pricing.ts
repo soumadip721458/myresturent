@@ -6,7 +6,9 @@ import type {
   OrderPricing,
   ShopConfig,
   SpinPrizeId,
+  SpinSlice,
 } from '../types';
+import { buildGoogleMapsLink } from './geo';
 import {
   formatCurrency,
   formatDigits,
@@ -15,9 +17,13 @@ import {
   getSpinSliceCopy,
 } from './i18n';
 
-export function getSpinSliceById(prizeId: SpinPrizeId | null) {
+export function getSpinSliceById(
+  prizeId: SpinPrizeId | null,
+  spinRewards: SpinSlice[] = SPIN_SLICES
+) {
   if (!prizeId) return null;
-  return SPIN_SLICES.find((s) => s.id === prizeId) ?? null;
+  const list = spinRewards.length > 0 ? spinRewards : SPIN_SLICES;
+  return list.find((s) => s.id === prizeId) ?? null;
 }
 
 export function formatServiceChargeLabel(
@@ -41,7 +47,8 @@ export function calculateOrderPricing(
   cart: Record<string, number>,
   wonPrizeId: SpinPrizeId | null,
   shop: ShopConfig,
-  lang: Language = 'bn'
+  lang: Language = 'bn',
+  spinRewards: SpinSlice[] = SPIN_SLICES
 ): OrderPricing {
   let subtotal = 0;
   let itemCount = 0;
@@ -83,7 +90,7 @@ export function calculateOrderPricing(
     lang === 'bn' ? 'কোনো অফার প্রযোজ্য নেই' : 'No offer applied';
   let spinRewardHint = '';
 
-  const slice = getSpinSliceById(wonPrizeId);
+  const slice = getSpinSliceById(wonPrizeId, spinRewards);
 
   if (slice) {
     const isBn = lang === 'bn';
@@ -215,10 +222,12 @@ export function buildWhatsAppOrder(
   customer: CustomerDetails,
   wonPrizeId: SpinPrizeId | null,
   pricing: OrderPricing,
-  lang: Language = 'bn'
+  lang: Language = 'bn',
+  spinRewards: SpinSlice[] = SPIN_SLICES,
+  orderId?: string
 ): { receiptText: string; whatsappUrl: string } {
   const shopCopy = getShopCopy(shop, lang);
-  const wonSlice = getSpinSliceById(wonPrizeId);
+  const wonSlice = getSpinSliceById(wonPrizeId, spinRewards);
   const wonSliceLabel = wonSlice ? getSpinSliceCopy(wonSlice, lang).shortTitle : '';
 
   const orderedLines = dishes
@@ -244,16 +253,35 @@ export function buildWhatsAppOrder(
 
     const lines: string[] = [
       `🍽️ *New Food Order — ${shopCopy.name}*`,
+      ...(orderId ? [`🆔 *Order ID:* ${orderId}`] : []),
       `━━━━━━━━━━━━━━━━━━`,
       `👤 *Customer Name:* ${customer.name.trim()}`,
       `📞 *Mobile Number:* ${customer.phone.trim()}`,
       `📍 *Delivery Address:* ${customer.address.trim()}`,
+    ];
+
+    if (customer.location) {
+      const distText = customer.location.distanceKm.toFixed(1);
+      const mapsUrl = buildGoogleMapsLink(
+        customer.location.lat,
+        customer.location.lng
+      );
+      lines.push(`📏 *Distance:* ${distText} km`);
+      lines.push(`🗺️ *Google Maps Link:* ${mapsUrl}`);
+      if (customer.location.distanceKm > (shop.maxDeliveryKm || 5)) {
+        lines.push(
+          `⚠️ _(Outside ${shop.maxDeliveryKm || 5} km delivery radius — please confirm by phone)_`
+        );
+      }
+    }
+
+    lines.push(
       `━━━━━━━━━━━━━━━━━━`,
       `📋 *Ordered Items:*`,
       ...orderedLines,
       `━━━━━━━━━━━━━━━━━━`,
-      `🧾 *Item Subtotal:* ${formatCurrency(pricing.subtotal, 'en')}`,
-    ];
+      `🧾 *Item Subtotal:* ${formatCurrency(pricing.subtotal, 'en')}`
+    );
 
     if (pricing.serviceChargeEnabled && pricing.serviceChargeAmount > 0) {
       lines.push(
@@ -284,16 +312,35 @@ export function buildWhatsAppOrder(
 
   const lines: string[] = [
     `🍽️ *নতুন ফুড অর্ডার — ${shop.name}*`,
+    ...(orderId ? [`🆔 *অর্ডার আইডি:* ${orderId}`] : []),
     `━━━━━━━━━━━━━━━━━━`,
     `👤 *গ্রাহকের নাম:* ${customer.name.trim()}`,
     `📞 *মোবাইল নম্বর:* ${customer.phone.trim()}`,
     `📍 *ডেলিভারি ঠিকানা:* ${customer.address.trim()}`,
+  ];
+
+  if (customer.location) {
+    const distBn = formatDigits(customer.location.distanceKm.toFixed(1), 'bn');
+    const mapsUrl = buildGoogleMapsLink(
+      customer.location.lat,
+      customer.location.lng
+    );
+    lines.push(`📏 *দূরত্ব:* ${distBn} কিমি`);
+    lines.push(`🗺️ *Google Maps লোকেশন:* ${mapsUrl}`);
+    if (customer.location.distanceKm > (shop.maxDeliveryKm || 5)) {
+      lines.push(
+        `⚠️ _(${formatDigits(shop.maxDeliveryKm || 5, 'bn')} কিমি ডেলিভারি সীমার বাইরে — কল করে কনফার্ম করুন)_`
+      );
+    }
+  }
+
+  lines.push(
     `━━━━━━━━━━━━━━━━━━`,
     `📋 *অর্ডার করা খাবার:*`,
     ...orderedLines,
     `━━━━━━━━━━━━━━━━━━`,
-    `🧾 *খাবারের মোট মূল্য (Subtotal):* ${formatCurrency(pricing.subtotal, 'bn')}`,
-  ];
+    `🧾 *খাবারের মোট মূল্য (Subtotal):* ${formatCurrency(pricing.subtotal, 'bn')}`
+  );
 
   if (pricing.serviceChargeEnabled && pricing.serviceChargeAmount > 0) {
     lines.push(

@@ -1,0 +1,383 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Global Safety Net (Default Deny)
+    // ===============================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ===============================================================
+    // Reusable Hardened Primitives
+    // ===============================================================
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidAdminUid(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isBootstrappedDeveloper() {
+      return isVerifiedUser() && request.auth.token.email == 'soumdip41@gmail.com';
+    }
+
+    function isDeveloperAdmin() {
+      return isBootstrappedDeveloper() || (
+        isVerifiedUser() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'developer'
+      );
+    }
+
+    function isShopOwnerFor(shopId) {
+      return isVerifiedUser() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'shop_owner' &&
+        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.shopId == shopId;
+    }
+
+    // ===============================================================
+    // Validation Blueprints (Anti-Update-Gap)
+    // ===============================================================
+    function isValidShopConfig(cfg) {
+      return cfg is map &&
+        cfg.keys().hasAll([
+          'name',
+          'address',
+          'rating',
+          'statusText',
+          'whatsappNumber',
+          'heroImage',
+          'serviceChargeEnabled',
+          'serviceChargeType',
+          'serviceChargeValue',
+          'serviceChargeLabel',
+          'deliveryRadiusText',
+          'shopLat',
+          'shopLng',
+          'maxDeliveryKm'
+        ]) &&
+        cfg.keys().hasOnly([
+          'name',
+          'address',
+          'rating',
+          'statusText',
+          'whatsappNumber',
+          'heroImage',
+          'serviceChargeEnabled',
+          'serviceChargeType',
+          'serviceChargeValue',
+          'serviceChargeLabel',
+          'deliveryRadiusText',
+          'shopLat',
+          'shopLng',
+          'maxDeliveryKm'
+        ]) &&
+        cfg.name is string && cfg.name.size() >= 1 && cfg.name.size() <= 120 &&
+        cfg.address is string && cfg.address.size() >= 1 && cfg.address.size() <= 240 &&
+        cfg.rating is string && cfg.rating.size() >= 1 && cfg.rating.size() <= 20 &&
+        cfg.statusText is string && cfg.statusText.size() >= 1 && cfg.statusText.size() <= 180 &&
+        cfg.whatsappNumber is string && cfg.whatsappNumber.size() >= 7 && cfg.whatsappNumber.size() <= 20 && cfg.whatsappNumber.matches('^[0-9]+$') &&
+        cfg.heroImage is string && cfg.heroImage.size() >= 1 && cfg.heroImage.size() <= 250000 &&
+        cfg.serviceChargeEnabled is bool &&
+        cfg.serviceChargeType in ['percentage', 'flat'] &&
+        cfg.serviceChargeValue is number && cfg.serviceChargeValue >= 0 && cfg.serviceChargeValue <= 500 &&
+        cfg.serviceChargeLabel is string && cfg.serviceChargeLabel.size() >= 1 && cfg.serviceChargeLabel.size() <= 100 &&
+        cfg.deliveryRadiusText is string && cfg.deliveryRadiusText.size() >= 1 && cfg.deliveryRadiusText.size() <= 40 &&
+        cfg.shopLat is number && cfg.shopLat >= -90 && cfg.shopLat <= 90 &&
+        cfg.shopLng is number && cfg.shopLng >= -180 && cfg.shopLng <= 180 &&
+        cfg.maxDeliveryKm is number && cfg.maxDeliveryKm > 0 && cfg.maxDeliveryKm <= 100;
+    }
+
+    function isValidDeveloperControl(ctrl) {
+      return ctrl is map &&
+        ctrl.keys().hasAll([
+          'serviceActive',
+          'subscriptionExpiry',
+          'developerBrandName',
+          'developerWhatsapp'
+        ]) &&
+        ctrl.keys().hasOnly([
+          'serviceActive',
+          'subscriptionExpiry',
+          'developerBrandName',
+          'developerWhatsapp'
+        ]) &&
+        ctrl.serviceActive is bool &&
+        ctrl.subscriptionExpiry is string &&
+        ctrl.subscriptionExpiry.size() == 10 &&
+        ctrl.subscriptionExpiry.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$') &&
+        ctrl.developerBrandName is string &&
+        ctrl.developerBrandName.size() >= 1 &&
+        ctrl.developerBrandName.size() <= 80 &&
+        ctrl.developerWhatsapp is string &&
+        ctrl.developerWhatsapp.size() >= 7 &&
+        ctrl.developerWhatsapp.size() <= 20 &&
+        ctrl.developerWhatsapp.matches('^[0-9]+$');
+    }
+
+    function isValidMenuList(items) {
+      return items is list &&
+        items.size() <= 60 &&
+        (items.size() == 0 || (
+          items[0] is map &&
+          items[0].id is string && items[0].id.size() >= 1 && items[0].id.size() <= 80 &&
+          items[0].name is string && items[0].name.size() >= 1 && items[0].name.size() <= 120 &&
+          items[0].price is number && items[0].price >= 0 && items[0].price <= 100000 &&
+          (!('inStock' in items[0]) || items[0].inStock is bool)
+        ));
+    }
+
+    function isValidSpinRewardsList(rewards) {
+      return rewards is list &&
+        rewards.size() <= 10 &&
+        (rewards.size() == 0 || (
+          rewards[0] is map &&
+          rewards[0].id is string && rewards[0].id.size() >= 1 && rewards[0].id.size() <= 64 &&
+          rewards[0].wheelLabel is string && rewards[0].wheelLabel.size() >= 1 && rewards[0].wheelLabel.size() <= 120 &&
+          rewards[0].weight is number && rewards[0].weight >= 0 && rewards[0].weight <= 100
+        ));
+    }
+
+    function isValidShopTenant(data) {
+      return data.keys().hasAll([
+          'shopId',
+          'shopConfig',
+          'menuItems',
+          'spinRewards',
+          'developerControl',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'shopId',
+          'shopConfig',
+          'menuItems',
+          'spinRewards',
+          'developerControl',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        isValidId(data.shopId) &&
+        isValidShopConfig(data.shopConfig) &&
+        isValidMenuList(data.menuItems) &&
+        isValidSpinRewardsList(data.spinRewards) &&
+        isValidDeveloperControl(data.developerControl) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAdminRole(data) {
+      return data.keys().hasAll(['role', 'shopId', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['role', 'shopId', 'createdAt', 'updatedAt']) &&
+        data.role in ['developer', 'shop_owner'] &&
+        data.shopId is string && data.shopId.size() >= 1 && data.shopId.size() <= 64 &&
+        data.shopId.matches('^[a-zA-Z0-9_\\-*]+$') &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidOrderItems(items) {
+      return items is list &&
+        items.size() >= 1 &&
+        items.size() <= 40 &&
+        items[0] is map &&
+        items[0].dishId is string && items[0].dishId.size() >= 1 && items[0].dishId.size() <= 80 &&
+        items[0].name is string && items[0].name.size() >= 1 && items[0].name.size() <= 120 &&
+        items[0].qty is number && items[0].qty >= 1 && items[0].qty <= 99 &&
+        items[0].unitPrice is number && items[0].unitPrice >= 0 && items[0].unitPrice <= 100000 &&
+        items[0].lineTotal is number && items[0].lineTotal >= 0 && items[0].lineTotal <= 500000;
+    }
+
+    function isValidCloudOrder(data, shopId) {
+      return data.keys().hasAll([
+          'orderId',
+          'shopId',
+          'timestamp',
+          'updatedAt',
+          'customerName',
+          'customerPhone',
+          'address',
+          'distanceKm',
+          'googleMapsUrl',
+          'items',
+          'finalTotal',
+          'spinReward',
+          'status'
+        ]) &&
+        data.keys().hasOnly([
+          'orderId',
+          'shopId',
+          'timestamp',
+          'updatedAt',
+          'customerName',
+          'customerPhone',
+          'address',
+          'distanceKm',
+          'googleMapsUrl',
+          'items',
+          'finalTotal',
+          'spinReward',
+          'status'
+        ]) &&
+        data.orderId is string && data.orderId.size() >= 8 && data.orderId.size() <= 24 && data.orderId.matches('^#ORD-[0-9]{4,8}$') &&
+        data.shopId is string && data.shopId == shopId &&
+        data.timestamp is timestamp &&
+        data.updatedAt is timestamp &&
+        data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 100 &&
+        data.customerPhone is string && data.customerPhone.size() >= 10 && data.customerPhone.size() <= 15 && data.customerPhone.matches('^[0-9]{10,15}$') &&
+        data.address is string && data.address.size() >= 1 && data.address.size() <= 300 &&
+        data.distanceKm is number && data.distanceKm >= -1 && data.distanceKm <= 500 &&
+        data.googleMapsUrl is string && data.googleMapsUrl.size() <= 160 && (
+          data.googleMapsUrl == '' ||
+          data.googleMapsUrl.matches('^https://www\\.google\\.com/maps\\?q=-?[0-9]+(\\.[0-9]+)?,-?[0-9]+(\\.[0-9]+)?$')
+        ) &&
+        isValidOrderItems(data.items) &&
+        data.finalTotal is number && data.finalTotal >= 0 && data.finalTotal <= 500000 &&
+        data.spinReward is string && data.spinReward.size() <= 140 &&
+        data.status in ['Pending', 'Confirmed', 'Delivered', 'Cancelled'];
+    }
+
+    // ===============================================================
+    // Collection: /shops/{shopId}
+    // Public single-document storefront read; tiered authenticated writes
+    // ===============================================================
+    match /shops/{shopId} {
+      allow get: if isValidId(shopId);
+      allow list: if false;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(shopId) &&
+        isValidShopTenant(incoming()) &&
+        incoming().shopId == shopId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isDeveloperAdmin();
+
+      allow update: if isVerifiedUser() &&
+        isValidId(shopId) &&
+        isValidShopTenant(incoming()) &&
+        incoming().shopId == existing().shopId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          // Action 1: Developer Admin full tenant & subscription update
+          (isDeveloperAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
+            'shopConfig',
+            'menuItems',
+            'spinRewards',
+            'developerControl',
+            'updatedAt'
+          ])) ||
+          // Action 2: Shop Owner storefront & menu update (cannot modify developerControl)
+          (isShopOwnerFor(shopId) && incoming().diff(existing()).affectedKeys().hasOnly([
+            'shopConfig',
+            'menuItems',
+            'spinRewards',
+            'updatedAt'
+          ]))
+        );
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(shopId) &&
+        isDeveloperAdmin();
+
+      // ===============================================================
+      // Subcollection: /shops/{shopId}/orders/{orderDocId}
+      // Permanent tamper-proof order log:
+      // - Customers can ONLY append valid 'Pending' orders (no read/edit/delete)
+      // - Verified Developer Admin or Shop Owner can read & update status only
+      // - Deletes are permanently forbidden to keep an immutable audit log
+      // ===============================================================
+      match /orders/{orderDocId} {
+        allow get: if isVerifiedUser() &&
+          isValidId(shopId) &&
+          isValidId(orderDocId) &&
+          (isDeveloperAdmin() || isShopOwnerFor(shopId));
+
+        allow list: if isVerifiedUser() &&
+          isValidId(shopId) &&
+          resource.data.shopId == shopId &&
+          (isDeveloperAdmin() || isShopOwnerFor(shopId));
+
+        allow create: if isValidId(shopId) &&
+          isValidId(orderDocId) &&
+          isValidCloudOrder(incoming(), shopId) &&
+          incoming().status == 'Pending' &&
+          incoming().timestamp == request.time &&
+          incoming().updatedAt == request.time &&
+          (shopId == 'royal-biryani' || exists(/databases/$(database)/documents/shops/$(shopId)));
+
+        allow update: if isVerifiedUser() &&
+          isValidId(shopId) &&
+          isValidId(orderDocId) &&
+          isValidCloudOrder(incoming(), shopId) &&
+          incoming().orderId == existing().orderId &&
+          incoming().shopId == existing().shopId &&
+          incoming().timestamp == existing().timestamp &&
+          incoming().customerName == existing().customerName &&
+          incoming().customerPhone == existing().customerPhone &&
+          incoming().address == existing().address &&
+          incoming().distanceKm == existing().distanceKm &&
+          incoming().googleMapsUrl == existing().googleMapsUrl &&
+          incoming().items == existing().items &&
+          incoming().finalTotal == existing().finalTotal &&
+          incoming().spinReward == existing().spinReward &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) &&
+          (isDeveloperAdmin() || isShopOwnerFor(shopId));
+
+        allow delete: if false;
+      }
+    }
+
+    // ===============================================================
+    // Collection: /admins/{userId}
+    // Strictly isolated RBAC assignments managed by Developer Admin
+    // ===============================================================
+    match /admins/{userId} {
+      allow get: if isVerifiedUser() &&
+        isValidAdminUid(userId) &&
+        (request.auth.uid == userId || isDeveloperAdmin());
+
+      allow list: if false;
+
+      allow create: if isVerifiedUser() &&
+        isValidAdminUid(userId) &&
+        isValidAdminRole(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isDeveloperAdmin();
+
+      allow update: if isVerifiedUser() &&
+        isValidAdminUid(userId) &&
+        isValidAdminRole(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        isDeveloperAdmin() &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['role', 'shopId', 'updatedAt']);
+
+      allow delete: if isVerifiedUser() &&
+        isValidAdminUid(userId) &&
+        isDeveloperAdmin();
+    }
+  }
+}

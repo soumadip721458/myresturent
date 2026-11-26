@@ -1,0 +1,189 @@
+{
+  "entities": {
+    "ShopTenant": {
+      "title": "ShopTenant",
+      "description": "Multi-tenant restaurant configuration document containing public storefront settings, menu catalog, spin-wheel offers, and SaaS subscription control.",
+      "type": "object",
+      "properties": {
+        "shopId": {
+          "type": "string",
+          "description": "Unique tenant shop slug matching the document ID.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "shopConfig": {
+          "type": "object",
+          "description": "Public restaurant storefront branding, WhatsApp order number, packaging/GST charge config, serviceable radius, and shop GPS coordinates (shopLat, shopLng, maxDeliveryKm)."
+        },
+        "menuItems": {
+          "type": "array",
+          "description": "Bounded list (max 60) of menu dishes with pricing, descriptions, badges, image URLs, and inStock boolean availability flag."
+        },
+        "spinRewards": {
+          "type": "array",
+          "description": "Bounded list (max 10) of Spin & Win wheel slices with labels, colors, and probability weights."
+        },
+        "developerControl": {
+          "type": "object",
+          "description": "SaaS developer subscription control: serviceActive boolean, subscriptionExpiry (YYYY-MM-DD), developerBrandName, and developerWhatsapp."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the shop document was initially provisioned."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest update."
+        }
+      },
+      "required": [
+        "shopId",
+        "shopConfig",
+        "menuItems",
+        "spinRewards",
+        "developerControl",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AdminRole": {
+      "title": "AdminRole",
+      "description": "Role-based access control document granting developer or shop_owner privileges to a verified Firebase Auth UID.",
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": ["developer", "shop_owner"],
+          "description": "Access tier assigned to this user."
+        },
+        "shopId": {
+          "type": "string",
+          "description": "Assigned tenant shop slug for shop_owner accounts (or '*' for developer).",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-*]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the role document was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest role update."
+        }
+      },
+      "required": ["role", "shopId", "createdAt", "updatedAt"]
+    },
+    "CloudOrder": {
+      "title": "CloudOrder",
+      "description": "Permanent tamper-proof customer order record captured before WhatsApp dispatch so deleted WhatsApp messages never cause lost orders.",
+      "type": "object",
+      "properties": {
+        "docId": {
+          "type": "string",
+          "description": "Firestore document ID for this order.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "orderId": {
+          "type": "string",
+          "description": "Human-readable order code such as #ORD-1042.",
+          "minLength": 4,
+          "maxLength": 24,
+          "pattern": "^#ORD-[0-9]{4,8}$"
+        },
+        "shopId": {
+          "type": "string",
+          "description": "Parent tenant shop slug.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the order was created (immutable)."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the order status was last updated."
+        },
+        "customerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "customerPhone": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 15,
+          "pattern": "^[0-9]{10,15}$"
+        },
+        "address": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "distanceKm": {
+          "type": "number",
+          "description": "Road-estimated distance in km (-1 when GPS not shared)."
+        },
+        "googleMapsUrl": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "items": {
+          "type": "array",
+          "description": "Bounded list (1..40) of ordered dish line items."
+        },
+        "finalTotal": {
+          "type": "number"
+        },
+        "spinReward": {
+          "type": "string",
+          "maxLength": 140
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Pending", "Confirmed", "Delivered", "Cancelled"]
+        }
+      },
+      "required": [
+        "orderId",
+        "shopId",
+        "timestamp",
+        "updatedAt",
+        "customerName",
+        "customerPhone",
+        "address",
+        "distanceKm",
+        "googleMapsUrl",
+        "items",
+        "finalTotal",
+        "spinReward",
+        "status"
+      ]
+    }
+  },
+  "firestore": {
+    "/shops/{shopId}": {
+      "schema": { "$ref": "#/entities/ShopTenant" },
+      "description": "Public storefront configuration and developer SaaS subscription state for each restaurant tenant."
+    },
+    "/shops/{shopId}/orders/{orderDocId}": {
+      "schema": { "$ref": "#/entities/CloudOrder" },
+      "description": "Permanent append-only customer order log; public validated create, admin/owner-only read and status updates, zero deletes."
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminRole" },
+      "description": "RBAC registry mapping authenticated user UIDs to developer or shop_owner permissions."
+    }
+  }
+}

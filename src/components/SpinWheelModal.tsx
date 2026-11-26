@@ -7,13 +7,11 @@ import { getSpinSliceCopy } from '../utils/i18n';
 interface SpinWheelModalProps {
   isOpen: boolean;
   lang: Language;
+  spinRewards?: SpinSlice[];
   onClose: () => void;
   wonPrizeId: SpinPrizeId | null;
   onWin: (prizeId: SpinPrizeId) => void;
 }
-
-const SLICE_COUNT = SPIN_SLICES.length; // 5
-const SLICE_DEG = 360 / SLICE_COUNT; // 72 deg
 
 function polarToCartesian(cx: number, cy: number, r: number, angleDeg: number) {
   const rad = ((angleDeg - 90) * Math.PI) / 180;
@@ -36,20 +34,21 @@ function describeSlicePath(
   return `M ${cx} ${cy} L ${start.x.toFixed(2)} ${start.y.toFixed(2)} A ${r} ${r} 0 ${largeArc} 1 ${end.x.toFixed(2)} ${end.y.toFixed(2)} Z`;
 }
 
-function pickWeightedSliceIndex(): number {
-  const totalWeight = SPIN_SLICES.reduce((acc, s) => acc + s.weight, 0);
-  if (totalWeight <= 0) return 1;
+function pickWeightedSliceIndex(slices: SpinSlice[]): number {
+  const totalWeight = slices.reduce((acc, s) => acc + Math.max(0, s.weight), 0);
+  if (totalWeight <= 0) return slices.length > 1 ? 1 : 0;
   let roll = Math.random() * totalWeight;
-  for (let i = 0; i < SPIN_SLICES.length; i++) {
-    roll -= SPIN_SLICES[i].weight;
+  for (let i = 0; i < slices.length; i++) {
+    roll -= Math.max(0, slices[i].weight);
     if (roll <= 0) return i;
   }
-  return 1;
+  return slices.length > 1 ? 1 : 0;
 }
 
 export function SpinWheelModal({
   isOpen,
   lang,
+  spinRewards = SPIN_SLICES,
   onClose,
   wonPrizeId,
   onWin,
@@ -60,9 +59,12 @@ export function SpinWheelModal({
 
   if (!isOpen) return null;
 
+  const slices = spinRewards.length > 0 ? spinRewards : SPIN_SLICES;
+  const sliceDeg = 360 / slices.length;
+
   const isBn = lang === 'bn';
   const activeWonSlice =
-    justWonSlice || SPIN_SLICES.find((s) => s.id === wonPrizeId) || null;
+    justWonSlice || slices.find((s) => s.id === wonPrizeId) || null;
   const activeWonCopy = activeWonSlice
     ? getSpinSliceCopy(activeWonSlice, lang)
     : null;
@@ -71,11 +73,11 @@ export function SpinWheelModal({
   const handleSpin = () => {
     if (isSpinning || wonPrizeId) return;
 
-    const targetIndex = pickWeightedSliceIndex();
-    const selectedSlice = SPIN_SLICES[targetIndex];
-    const centerAngle = targetIndex * SLICE_DEG + SLICE_DEG / 2;
+    const targetIndex = pickWeightedSliceIndex(slices);
+    const selectedSlice = slices[targetIndex];
+    const centerAngle = targetIndex * sliceDeg + sliceDeg / 2;
     const alignRemainder = (360 - centerAngle) % 360;
-    const jitter = (Math.random() - 0.5) * 28;
+    const jitter = (Math.random() - 0.5) * Math.min(28, sliceDeg * 0.4);
     const fullTurns = 6 * 360;
     const nextRotation = fullTurns + alignRemainder + jitter;
 
@@ -162,10 +164,10 @@ export function SpinWheelModal({
                 viewBox="0 0 300 300"
                 className="w-full h-full rounded-full overflow-visible"
               >
-                {SPIN_SLICES.map((slice, index) => {
-                  const startAngle = index * SLICE_DEG;
-                  const endAngle = startAngle + SLICE_DEG;
-                  const midAngle = startAngle + SLICE_DEG / 2;
+                {slices.map((slice, index) => {
+                  const startAngle = index * sliceDeg;
+                  const endAngle = startAngle + sliceDeg;
+                  const midAngle = startAngle + sliceDeg / 2;
                   const labelPos = polarToCartesian(150, 150, 96, midAngle);
                   const copy = getSpinSliceCopy(slice, lang);
                   const lines = copy.wheelLabel.split('\n');

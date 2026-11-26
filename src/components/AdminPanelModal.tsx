@@ -1,8 +1,19 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import type { User } from 'firebase/auth';
 import {
   Check,
+  ClipboardList,
+  Cloud,
+  CloudOff,
+  Crosshair,
+  ExternalLink,
+  Gift,
   ImagePlus,
+  Loader2,
   Lock,
+  LogIn,
+  LogOut,
+  MapPin,
   Pencil,
   Plus,
   QrCode,
@@ -12,33 +23,57 @@ import {
   UtensilsCrossed,
   X,
 } from 'lucide-react';
-import { DEFAULT_MENU, DEFAULT_SHOP_CONFIG } from '../data/defaults';
+import {
+  DEFAULT_MENU,
+  DEFAULT_SHOP_CONFIG,
+  SPIN_SLICES,
+} from '../data/defaults';
+import { SHOP_ID, isFirebaseConfigured } from '../firebase';
 import type {
+  CloudOrder,
+  CloudSyncStatus,
   Dish,
   DishBadge,
   DishCategory,
   ExtraChargeType,
+  OrderStatus,
   ShopConfig,
+  SpinSlice,
 } from '../types';
-import { compressImageFile, formatRupees } from '../utils/bengali';
+import {
+  compressImageFile,
+  formatRupees,
+  toBengaliDigits,
+} from '../utils/bengali';
+import { buildGoogleMapsLink, requestCurrentPosition } from '../utils/geo';
 import { formatServiceChargeLabel } from '../utils/pricing';
 import { FoodImage } from './FoodImage';
+import { LiveOrdersTab } from './LiveOrdersTab';
 import { TableQrCard } from './TableQrCard';
-
-// Developer-only master Admin PIN. Edit this constant directly in source code to change the PIN.
-const DEVELOPER_ADMIN_PIN = '2026';
 
 interface AdminPanelModalProps {
   isOpen: boolean;
   onClose: () => void;
   shop: ShopConfig;
   dishes: Dish[];
-  onSaveShop: (nextShop: ShopConfig) => void;
-  onSaveDishes: (nextDishes: Dish[]) => void;
+  spinRewards: SpinSlice[];
+  orders: CloudOrder[];
+  ordersError: string | null;
+  onSaveShop: (nextShop: ShopConfig) => Promise<void> | void;
+  onSaveDishes: (nextDishes: Dish[]) => Promise<void> | void;
+  onSaveSpinRewards: (nextRewards: SpinSlice[]) => Promise<void> | void;
+  onUpdateOrderStatus: (
+    order: CloudOrder,
+    nextStatus: OrderStatus
+  ) => Promise<void>;
+  adminUser: User | null;
+  cloudStatus: CloudSyncStatus;
+  onSignInGoogle: () => Promise<void>;
+  onSignOutGoogle: () => Promise<void>;
   onNotify: (message: string) => void;
 }
 
-type AdminTab = 'shop' | 'menu' | 'qr';
+type AdminTab = 'orders' | 'shop' | 'menu' | 'spin' | 'qr';
 
 interface DishFormState {
   id: string | null;
@@ -49,6 +84,7 @@ interface DishFormState {
   description: string;
   image: string;
   badge: DishBadge;
+  inStock: boolean;
 }
 
 const EMPTY_DISH_FORM: DishFormState = {
@@ -60,6 +96,7 @@ const EMPTY_DISH_FORM: DishFormState = {
   description: '',
   image: '',
   badge: '',
+  inStock: true,
 };
 
 export function AdminPanelModal({
@@ -67,18 +104,26 @@ export function AdminPanelModal({
   onClose,
   shop,
   dishes,
+  spinRewards,
+  orders,
+  ordersError,
   onSaveShop,
   onSaveDishes,
+  onSaveSpinRewards,
+  onUpdateOrderStatus,
+  adminUser,
+  cloudStatus,
+  onSignInGoogle,
+  onSignOutGoogle,
   onNotify,
 }: AdminPanelModalProps) {
-  const [unlocked, setUnlocked] = useState(false);
-  const [pinInput, setPinInput] = useState('');
-  const [pinError, setPinError] = useState('');
-  const [activeTab, setActiveTab] = useState<AdminTab>('shop');
+  const [activeTab, setActiveTab] = useState<AdminTab>('orders');
+  const [authBusy, setAuthBusy] = useState(false);
 
-  // Section A: Shop Branding Form
+  // Section A: Shop Branding & GPS Form
   const [shopDraft, setShopDraft] = useState<ShopConfig>(shop);
   const [uploadingHero, setUploadingHero] = useState(false);
+  const [capturingGps, setCapturingGps] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
 
   // Section B: Menu Management Form
@@ -87,25 +132,39 @@ export function AdminPanelModal({
   const [dishFormError, setDishFormError] = useState('');
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
 
+  // Section C: Spin Rewards Draft
+  const [rewardsDraft, setRewardsDraft] = useState<SpinSlice[]>(spinRewards);
+
+  useEffect(() => {
+    if (isOpen) {
+      setShopDraft(shop);
+      setRewardsDraft(spinRewards);
+    }
+  }, [isOpen, shop, spinRewards]);
+
   if (!isOpen) return null;
 
   const handleClose = () => {
-    setUnlocked(false);
-    setPinInput('');
-    setPinError('');
     setConfirmReset(false);
     setPendingDeleteId(null);
     onClose();
   };
 
-  const handleUnlock = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (pinInput.trim() === DEVELOPER_ADMIN_PIN) {
-      setUnlocked(true);
-      setPinError('');
-      setShopDraft(shop);
-    } else {
-      setPinError('ভুল পিন! সঠিক অ্যাডমিন পিন দিন।');
+  const handleGoogleSignIn = async () => {
+    setAuthBusy(true);
+    try {
+      await onSignInGoogle();
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleGoogleSignOut = async () => {
+    setAuthBusy(true);
+    try {
+      await onSignOutGoogle();
+    } finally {
+      setAuthBusy(false);
     }
   };
 
@@ -114,7 +173,7 @@ export function AdminPanelModal({
     if (!file) return;
     setUploadingHero(true);
     try {
-      const dataUrl = await compressImageFile(file, 1200, 0.78);
+      const dataUrl = await compressImageFile(file, 720, 0.7);
       setShopDraft((prev) => ({ ...prev, heroImage: dataUrl }));
       onNotify('দোকানের নতুন ছবি আপলোড হয়েছে — সেভ করুন');
     } catch {
@@ -125,42 +184,105 @@ export function AdminPanelModal({
     }
   };
 
-  const handleSaveShopClick = (e: React.FormEvent) => {
-    e.preventDefault();
-    const numericCharge = Number(shopDraft.serviceChargeValue);
-    const cleanedShop: ShopConfig = {
-      name: shopDraft.name.trim() || DEFAULT_SHOP_CONFIG.name,
-      address: shopDraft.address.trim() || DEFAULT_SHOP_CONFIG.address,
-      rating: shopDraft.rating.trim() || DEFAULT_SHOP_CONFIG.rating,
-      statusText: shopDraft.statusText.trim() || DEFAULT_SHOP_CONFIG.statusText,
+  const buildCleanedShop = (draft: ShopConfig): ShopConfig => {
+    const numericCharge = Number(draft.serviceChargeValue);
+    const rawLat = Number(draft.shopLat);
+    const rawLng = Number(draft.shopLng);
+    const rawMaxKm = Number(draft.maxDeliveryKm);
+
+    const shopLat =
+      Number.isFinite(rawLat) && rawLat >= -90 && rawLat <= 90
+        ? Number(rawLat.toFixed(6))
+        : DEFAULT_SHOP_CONFIG.shopLat;
+    const shopLng =
+      Number.isFinite(rawLng) && rawLng >= -180 && rawLng <= 180
+        ? Number(rawLng.toFixed(6))
+        : DEFAULT_SHOP_CONFIG.shopLng;
+    const maxDeliveryKm =
+      Number.isFinite(rawMaxKm) && rawMaxKm > 0 && rawMaxKm <= 100
+        ? Number(rawMaxKm.toFixed(1))
+        : DEFAULT_SHOP_CONFIG.maxDeliveryKm;
+
+    return {
+      name: draft.name.trim() || DEFAULT_SHOP_CONFIG.name,
+      address: draft.address.trim() || DEFAULT_SHOP_CONFIG.address,
+      rating: draft.rating.trim() || DEFAULT_SHOP_CONFIG.rating,
+      statusText: draft.statusText.trim() || DEFAULT_SHOP_CONFIG.statusText,
       whatsappNumber:
-        shopDraft.whatsappNumber.replace(/\D/g, '') ||
+        draft.whatsappNumber.replace(/\D/g, '') ||
         DEFAULT_SHOP_CONFIG.whatsappNumber,
-      heroImage: shopDraft.heroImage.trim() || DEFAULT_SHOP_CONFIG.heroImage,
-      serviceChargeEnabled: Boolean(shopDraft.serviceChargeEnabled),
-      serviceChargeType: shopDraft.serviceChargeType,
+      heroImage: draft.heroImage.trim() || DEFAULT_SHOP_CONFIG.heroImage,
+      serviceChargeEnabled: Boolean(draft.serviceChargeEnabled),
+      serviceChargeType: draft.serviceChargeType,
       serviceChargeValue:
         Number.isFinite(numericCharge) && numericCharge >= 0
           ? numericCharge
           : DEFAULT_SHOP_CONFIG.serviceChargeValue,
       serviceChargeLabel:
-        shopDraft.serviceChargeLabel.trim() ||
+        draft.serviceChargeLabel.trim() ||
         DEFAULT_SHOP_CONFIG.serviceChargeLabel,
       deliveryRadiusText:
-        shopDraft.deliveryRadiusText.trim() ||
-        DEFAULT_SHOP_CONFIG.deliveryRadiusText,
+        draft.deliveryRadiusText.trim() ||
+        `${toBengaliDigits(maxDeliveryKm)} কিমি`,
+      shopLat,
+      shopLng,
+      maxDeliveryKm,
     };
-    onSaveShop(cleanedShop);
-    onNotify('দোকানের তথ্য ও চার্জ সেটিংস সফলভাবে সেভ হয়েছে!');
+  };
+
+  const handleCaptureShopGps = async () => {
+    setCapturingGps(true);
+    try {
+      const fix = await requestCurrentPosition('bn');
+      const updatedDraft: ShopConfig = {
+        ...shopDraft,
+        shopLat: fix.lat,
+        shopLng: fix.lng,
+      };
+      setShopDraft(updatedDraft);
+      const cleaned = buildCleanedShop(updatedDraft);
+      await onSaveShop(cleaned);
+      onNotify(
+        `📍 দোকানের GPS লোকেশন সেভ হয়েছে (${fix.lat.toFixed(4)}, ${fix.lng.toFixed(4)})`
+      );
+    } catch (err) {
+      onNotify(
+        err instanceof Error
+          ? err.message
+          : 'GPS লোকেশন নেওয়া যায়নি — ম্যানুয়ালি Latitude/Longitude লিখুন'
+      );
+    } finally {
+      setCapturingGps(false);
+    }
+  };
+
+  const handleSaveShopClick = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanedShop = buildCleanedShop(shopDraft);
+    void onSaveShop(cleanedShop);
   };
 
   const handleResetDefaults = () => {
-    onSaveShop(DEFAULT_SHOP_CONFIG);
-    onSaveDishes(DEFAULT_MENU);
+    void onSaveShop(DEFAULT_SHOP_CONFIG);
+    void onSaveDishes(DEFAULT_MENU);
+    void onSaveSpinRewards(SPIN_SLICES);
     setShopDraft(DEFAULT_SHOP_CONFIG);
+    setRewardsDraft(SPIN_SLICES);
     setDishForm(EMPTY_DISH_FORM);
     setConfirmReset(false);
     onNotify('সব তথ্য ও মেনু ডিফল্ট অবস্থায় ফিরিয়ে আনা হয়েছে');
+  };
+
+  const handleSaveSpinRewardsClick = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleaned = rewardsDraft.map((s) => ({
+      ...s,
+      shortTitle: s.shortTitle.trim() || s.wheelLabel.replace(/\n/g, ' '),
+      fullLabel: s.shortTitle.trim() || s.fullLabel,
+      conditionText: s.conditionText.trim(),
+      weight: Math.max(0, Math.min(100, Math.round(Number(s.weight) || 0))),
+    }));
+    void onSaveSpinRewards(cleaned);
   };
 
   const handleDishImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -168,7 +290,7 @@ export function AdminPanelModal({
     if (!file) return;
     setUploadingDishImg(true);
     try {
-      const dataUrl = await compressImageFile(file, 800, 0.76);
+      const dataUrl = await compressImageFile(file, 640, 0.7);
       setDishForm((prev) => ({ ...prev, image: dataUrl }));
       onNotify('খাবারের ছবি যুক্ত হয়েছে');
     } catch {
@@ -189,8 +311,26 @@ export function AdminPanelModal({
       description: dish.description,
       image: dish.image,
       badge: dish.badge ?? '',
+      inStock: dish.inStock !== false,
     });
     setDishFormError('');
+  };
+
+  const handleToggleDishStock = (dish: Dish) => {
+    const currentlyInStock = dish.inStock !== false;
+    const nextInStock = !currentlyInStock;
+    const nextDishes = dishes.map((d) =>
+      d.id === dish.id ? { ...d, inStock: nextInStock } : d
+    );
+    void onSaveDishes(nextDishes);
+    if (dishForm.id === dish.id) {
+      setDishForm((prev) => ({ ...prev, inStock: nextInStock }));
+    }
+    onNotify(
+      nextInStock
+        ? `✅ "${dish.name}" এখন উপলব্ধ (In Stock) করা হয়েছে`
+        : `🚫 "${dish.name}" শেষ হয়ে গেছে (Sold Out) হিসেবে চিহ্নিত হয়েছে`
+    );
   };
 
   const handleSaveDish = (e: React.FormEvent) => {
@@ -208,9 +348,14 @@ export function AdminPanelModal({
       return;
     }
 
+    const existingDish = dishForm.id
+      ? dishes.find((d) => d.id === dishForm.id)
+      : undefined;
+
     const nextDish: Dish = {
       id: dishForm.id || `dish-${Date.now()}`,
       name,
+      ...(existingDish?.nameEn ? { nameEn: existingDish.nameEn } : {}),
       category: dishForm.category,
       price: Math.round(price),
       oldPrice:
@@ -219,10 +364,14 @@ export function AdminPanelModal({
           : undefined,
       description:
         dishForm.description.trim() || 'আমাদের তাজা ও সুস্বাদু স্পেশাল পদ।',
+      ...(existingDish?.descriptionEn
+        ? { descriptionEn: existingDish.descriptionEn }
+        : {}),
       image:
         dishForm.image.trim() ||
         'https://images.unsplash.com/photo-1633945274405-b6c8069047b0?auto=format&fit=crop&w=800&q=80',
       badge: dishForm.badge,
+      inStock: dishForm.inStock,
     };
 
     if (dishForm.id) {
@@ -259,18 +408,18 @@ export function AdminPanelModal({
       <div className="w-full max-w-2xl bg-white dark:bg-[#1a1b26] rounded-3xl shadow-2xl overflow-hidden border border-black/10 dark:border-white/10 max-h-[92vh] flex flex-col text-[#1d1e2c] dark:text-slate-100">
         {/* Header */}
         <div className="bg-[#1d1e2c] text-white px-5 py-4 flex items-center justify-between gap-3 shrink-0">
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-9 h-9 rounded-xl bg-[#ff9f1c] text-[#1d1e2c] flex items-center justify-center shrink-0">
               <Lock className="w-5 h-5" />
             </div>
-            <div>
-              <h2 id="admin-modal-title" className="text-lg font-bold leading-tight">
+            <div className="min-w-0">
+              <h2 id="admin-modal-title" className="text-lg font-bold leading-tight truncate">
                 মালিক / অ্যাডমিন ড্যাশবোর্ড
               </h2>
-              <p className="text-xs text-white/75">
-                {unlocked
-                  ? 'সব পরিবর্তন স্বয়ংক্রিয়ভাবে ব্রাউজারে সেভ থাকে'
-                  : 'প্রবেশ করতে ৪ সংখ্যার অ্যাডমিন পিন দিন'}
+              <p className="text-xs text-white/75 truncate">
+                {isFirebaseConfigured && adminUser
+                  ? `☁️ লাইভ ক্লাউড সিঙ্ক চালু (shops/${SHOP_ID})`
+                  : 'স্থানীয় সেভ চালু • সব ফোনে লাইভ আপডেটের জন্য Google লগইন করুন'}
               </p>
             </div>
           </div>
@@ -279,101 +428,253 @@ export function AdminPanelModal({
             type="button"
             onClick={handleClose}
             aria-label="বন্ধ করুন"
-            className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors cursor-pointer"
+            className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors shrink-0 cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* PIN Gate or Dashboard Body */}
-        {!unlocked ? (
-          <form onSubmit={handleUnlock} className="p-6 sm:p-8 max-w-sm mx-auto w-full">
-            <div className="text-center mb-5">
-              <div className="w-14 h-14 mx-auto rounded-2xl bg-[#f4f5f7] dark:bg-[#141520] text-[#1d1e2c] dark:text-slate-100 flex items-center justify-center mb-3">
-                <Lock className="w-7 h-7 text-[#d90429] dark:text-[#ff6b81]" />
-              </div>
-              <h3 className="text-lg font-bold text-[#1d1e2c] dark:text-slate-100">
-                অ্যাডমিন পিন প্রবেশ করান
-              </h3>
-            </div>
-
-            <input
-              type="password"
-              inputMode="numeric"
-              maxLength={6}
-              value={pinInput}
-              onChange={(e) => {
-                setPinInput(e.target.value);
-                setPinError('');
-              }}
-              placeholder="পিন লিখুন"
-              autoFocus
-              className="w-full min-h-[48px] text-center tracking-[0.35em] font-bold text-lg rounded-xl border border-slate-300 dark:border-white/15 bg-[#f9fafb] dark:bg-[#141520] text-[#1d1e2c] dark:text-white focus:bg-white dark:focus:bg-[#181926] focus:border-[#d90429] focus:outline-none focus:ring-2 focus:ring-[#d90429]/20"
-            />
-
-            {pinError && (
-              <p className="mt-2 text-xs font-semibold text-[#d90429] text-center">
-                {pinError}
-              </p>
+        {/* Firebase Cloud Sync Strip */}
+        <div className="bg-[#141520] text-white px-4 py-2 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            {isFirebaseConfigured && cloudStatus !== 'error' ? (
+              <Cloud className="w-4 h-4 text-emerald-400 shrink-0" />
+            ) : (
+              <CloudOff className="w-4 h-4 text-amber-400 shrink-0" />
             )}
-
-            <button
-              type="submit"
-              className="mt-4 w-full min-h-[46px] rounded-xl bg-[#d90429] hover:bg-[#b30322] text-white font-bold text-base shadow-md transition-colors cursor-pointer"
-            >
-              ড্যাশবোর্ড খুলুন
-            </button>
-          </form>
-        ) : (
-          <>
-            {/* Admin Section Tabs */}
-            <div className="bg-[#f4f5f7] dark:bg-[#141520] px-4 py-2.5 border-b border-slate-200 dark:border-white/10 flex items-center gap-2 overflow-x-auto no-scrollbar shrink-0">
+            <span className="truncate text-white/90">
+              {isFirebaseConfigured
+                ? adminUser
+                  ? `Firestore Sync: ${adminUser.email}`
+                  : `Tenant: shops/${SHOP_ID} (ক্লাউড আপডেটের জন্য লগইন করুন)`
+                : 'LocalStorage Fallback Mode'}
+            </span>
+          </div>
+          {isFirebaseConfigured &&
+            (adminUser ? (
               <button
                 type="button"
-                onClick={() => setActiveTab('shop')}
-                className={`min-h-[42px] px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap shrink-0 flex items-center gap-1.5 transition-all cursor-pointer ${
-                  activeTab === 'shop'
-                    ? 'bg-[#1d1e2c] dark:bg-[#ff9f1c] text-white dark:text-[#1d1e2c] shadow-sm'
-                    : 'bg-white dark:bg-[#1a1b26] text-[#1d1e2c] dark:text-slate-200 border border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-[#232436]'
-                }`}
+                disabled={authBusy}
+                onClick={handleGoogleSignOut}
+                className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white font-bold inline-flex items-center gap-1 cursor-pointer"
               >
-                <Store className="w-4 h-4" />
-                <span>🏪 দোকানের ছবি ও তথ্য পরিবর্তন</span>
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Sign Out</span>
               </button>
-
+            ) : (
               <button
                 type="button"
-                onClick={() => setActiveTab('menu')}
-                className={`min-h-[42px] px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap shrink-0 flex items-center gap-1.5 transition-all cursor-pointer ${
-                  activeTab === 'menu'
-                    ? 'bg-[#1d1e2c] dark:bg-[#ff9f1c] text-white dark:text-[#1d1e2c] shadow-sm'
-                    : 'bg-white dark:bg-[#1a1b26] text-[#1d1e2c] dark:text-slate-200 border border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-[#232436]'
-                }`}
+                disabled={authBusy}
+                onClick={handleGoogleSignIn}
+                className="px-3 py-1 rounded-lg bg-[#ff9f1c] hover:bg-[#f2910d] text-[#1d1e2c] font-bold inline-flex items-center gap-1 cursor-pointer"
               >
-                <UtensilsCrossed className="w-4 h-4" />
-                <span>🍽️ মেনু ও খাবারের ছবি ম্যানেজ</span>
+                <LogIn className="w-3.5 h-3.5" />
+                <span>{authBusy ? 'লগইন...' : 'Google লগইন (Cloud Sync)'}</span>
               </button>
+            ))}
+        </div>
 
+        {/* Admin Section Tabs */}
+        <div className="bg-[#f4f5f7] dark:bg-[#141520] px-4 py-2.5 border-b border-slate-200 dark:border-white/10 flex items-center gap-2 overflow-x-auto no-scrollbar shrink-0">
+          {(() => {
+            const pendingCount = orders.filter(
+              (o) => o.status === 'Pending'
+            ).length;
+            return (
               <button
                 type="button"
-                onClick={() => setActiveTab('qr')}
+                onClick={() => setActiveTab('orders')}
                 className={`min-h-[42px] px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap shrink-0 flex items-center gap-1.5 transition-all cursor-pointer ${
-                  activeTab === 'qr'
+                  activeTab === 'orders'
                     ? 'bg-[#d90429] text-white shadow-sm'
                     : 'bg-white dark:bg-[#1a1b26] text-[#1d1e2c] dark:text-slate-200 border border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-[#232436]'
                 }`}
               >
-                <QrCode className="w-4 h-4" />
-                <span>📲 দোকানের QR কোড (Table QR)</span>
+                <ClipboardList className="w-4 h-4" />
+                <span>📋 অর্ডার লিস্ট</span>
+                {pendingCount > 0 && (
+                  <span
+                    className={`ml-0.5 px-1.5 py-0.5 rounded-md text-[11px] font-extrabold tabular-nums ${
+                      activeTab === 'orders'
+                        ? 'bg-[#ffd166] text-[#1d1e2c]'
+                        : 'bg-[#d90429] text-white'
+                    }`}
+                  >
+                    {toBengaliDigits(pendingCount)}
+                  </span>
+                )}
               </button>
-            </div>
+            );
+          })()}
 
-            {/* Scrollable Body — light-surface inner workspace ensures crisp print preview & form legibility */}
-            <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-6 bg-white text-[#1d1e2c]">
-              {activeTab === 'qr' ? (
-                <TableQrCard shop={shop} onNotify={onNotify} />
-              ) : activeTab === 'shop' ? (
-                <form onSubmit={handleSaveShopClick} className="space-y-4">
+          <button
+            type="button"
+            onClick={() => setActiveTab('shop')}
+            className={`min-h-[42px] px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap shrink-0 flex items-center gap-1.5 transition-all cursor-pointer ${
+              activeTab === 'shop'
+                ? 'bg-[#1d1e2c] dark:bg-[#ff9f1c] text-white dark:text-[#1d1e2c] shadow-sm'
+                : 'bg-white dark:bg-[#1a1b26] text-[#1d1e2c] dark:text-slate-200 border border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-[#232436]'
+            }`}
+          >
+            <Store className="w-4 h-4" />
+            <span>🏪 দোকানের তথ্য</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('menu')}
+            className={`min-h-[42px] px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap shrink-0 flex items-center gap-1.5 transition-all cursor-pointer ${
+              activeTab === 'menu'
+                ? 'bg-[#1d1e2c] dark:bg-[#ff9f1c] text-white dark:text-[#1d1e2c] shadow-sm'
+                : 'bg-white dark:bg-[#1a1b26] text-[#1d1e2c] dark:text-slate-200 border border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-[#232436]'
+            }`}
+          >
+            <UtensilsCrossed className="w-4 h-4" />
+            <span>🍽️ মেনু ম্যানেজ</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('spin')}
+            className={`min-h-[42px] px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap shrink-0 flex items-center gap-1.5 transition-all cursor-pointer ${
+              activeTab === 'spin'
+                ? 'bg-[#1d1e2c] dark:bg-[#ff9f1c] text-white dark:text-[#1d1e2c] shadow-sm'
+                : 'bg-white dark:bg-[#1a1b26] text-[#1d1e2c] dark:text-slate-200 border border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-[#232436]'
+            }`}
+          >
+            <Gift className="w-4 h-4" />
+            <span>🎁 স্পিন অফার</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('qr')}
+            className={`min-h-[42px] px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap shrink-0 flex items-center gap-1.5 transition-all cursor-pointer ${
+              activeTab === 'qr'
+                ? 'bg-[#1d1e2c] dark:bg-[#ff9f1c] text-white dark:text-[#1d1e2c] shadow-sm'
+                : 'bg-white dark:bg-[#1a1b26] text-[#1d1e2c] dark:text-slate-200 border border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-[#232436]'
+            }`}
+          >
+            <QrCode className="w-4 h-4" />
+            <span>📲 Table QR</span>
+          </button>
+        </div>
+
+        {/* Scrollable Body — light-surface inner workspace ensures crisp print preview & form legibility */}
+        <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-6 bg-white text-[#1d1e2c]">
+          {activeTab === 'orders' ? (
+            <LiveOrdersTab
+              orders={orders}
+              adminUser={adminUser}
+              ordersError={ordersError}
+              onUpdateStatus={onUpdateOrderStatus}
+            />
+          ) : activeTab === 'qr' ? (
+            <TableQrCard shop={shop} onNotify={onNotify} />
+          ) : activeTab === 'spin' ? (
+            <form onSubmit={handleSaveSpinRewardsClick} className="space-y-4">
+              <div>
+                <h3 className="text-base font-bold text-[#1d1e2c]">
+                  🎁 স্পিন অ্যান্ড উইন পুরস্কার ও ওয়েট (Probability)
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  কোন পুরস্কার জেতার সম্ভাবনা কত শতাংশ হবে তা সেট করুন (০ দিলে শুধু ডিসপ্লে হবে, কাস্টমার জিতবে না)।
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                {rewardsDraft.map((slice, idx) => (
+                  <div
+                    key={slice.id}
+                    className="rounded-2xl bg-[#f4f5f7] border border-slate-200 p-3.5 space-y-2.5"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="inline-flex items-center gap-2 text-xs font-bold text-[#1d1e2c]">
+                        <span
+                          className="w-3.5 h-3.5 rounded-full border border-black/15 inline-block"
+                          style={{ backgroundColor: slice.color }}
+                        />
+                        স্লাইস #{idx + 1} ({slice.id})
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <label className="text-xs font-semibold text-slate-600">
+                          ওয়েট:
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          value={slice.weight}
+                          onChange={(e) =>
+                            setRewardsDraft((prev) =>
+                              prev.map((item, i) =>
+                                i === idx
+                                  ? {
+                                      ...item,
+                                      weight:
+                                        e.target.value === ''
+                                          ? 0
+                                          : Number(e.target.value),
+                                    }
+                                  : item
+                              )
+                            )
+                          }
+                          className="w-16 min-h-[34px] px-2 rounded-lg border border-slate-300 bg-white text-center text-xs font-bold tabular-nums focus:border-[#d90429] focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <input
+                        type="text"
+                        value={slice.shortTitle}
+                        onChange={(e) =>
+                          setRewardsDraft((prev) =>
+                            prev.map((item, i) =>
+                              i === idx
+                                ? {
+                                    ...item,
+                                    shortTitle: e.target.value,
+                                    fullLabel: e.target.value,
+                                  }
+                                : item
+                            )
+                          )
+                        }
+                        placeholder="পুরস্কারের শিরোনাম"
+                        className="w-full min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm focus:border-[#d90429] focus:outline-none"
+                      />
+                      <input
+                        type="text"
+                        value={slice.conditionText}
+                        onChange={(e) =>
+                          setRewardsDraft((prev) =>
+                            prev.map((item, i) =>
+                              i === idx
+                                ? { ...item, conditionText: e.target.value }
+                                : item
+                            )
+                          )
+                        }
+                        placeholder="শর্ত (যেমন: ন্যূনতম ₹১৯৯ অর্ডারে)"
+                        className="w-full min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm focus:border-[#d90429] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <button
+                type="submit"
+                className="w-full min-h-[46px] rounded-xl bg-[#d90429] hover:bg-[#b30322] text-white font-bold text-sm flex items-center justify-center gap-2 shadow-md transition-colors cursor-pointer"
+              >
+                <Check className="w-4 h-4" />
+                <span>স্পিন পুরস্কার সেভ করুন</span>
+              </button>
+            </form>
+          ) : activeTab === 'shop' ? (
+            <form onSubmit={handleSaveShopClick} className="space-y-4">
                   {/* Hero Image Live Preview + Upload/URL */}
                   <div>
                     <label className="block text-sm font-bold text-[#1d1e2c] mb-2">
@@ -672,6 +973,133 @@ export function AdminPanelModal({
                     </div>
                   </div>
 
+                  {/* 1-Tap Shop GPS Location Setup */}
+                  <div className="rounded-2xl bg-[#f4f5f7] border border-slate-200 p-4 space-y-3.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <h3 className="text-sm font-bold text-[#1d1e2c] flex items-center gap-1.5">
+                          <MapPin className="w-4 h-4 text-[#d90429]" />
+                          <span>📍 দোকানের লোকেশন সেট করুন (Set Shop GPS)</span>
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          দোকানের সঠিক GPS সেট থাকলে গ্রাহকের দূরত্ব ও ফ্রি ডেলিভারি সীমা স্বয়ংক্রিয়ভাবে হিসাব হবে।
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={capturingGps}
+                      onClick={handleCaptureShopGps}
+                      className="w-full min-h-[44px] px-4 py-2.5 rounded-xl bg-[#1d1e2c] hover:bg-[#2a2c40] disabled:opacity-65 text-white font-bold text-xs sm:text-sm shadow-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                    >
+                      {capturingGps ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-[#ff9f1c]" />
+                      ) : (
+                        <Crosshair className="w-4 h-4 text-[#ff9f1c]" />
+                      )}
+                      <span>
+                        {capturingGps
+                          ? 'GPS লোকেশন ক্যাপচার হচ্ছে...'
+                          : '🎯 দোকানে বসে বর্তমান লোকেশন সেভ করুন'}
+                      </span>
+                    </button>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-[#1d1e2c] mb-1">
+                          Shop Latitude (`shopLat`)
+                        </label>
+                        <input
+                          type="number"
+                          step="any"
+                          value={shopDraft.shopLat}
+                          onChange={(e) =>
+                            setShopDraft((prev) => ({
+                              ...prev,
+                              shopLat:
+                                e.target.value === ''
+                                  ? 0
+                                  : Number(e.target.value),
+                            }))
+                          }
+                          className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm font-mono tabular-nums focus:border-[#d90429] focus:outline-none"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-[#1d1e2c] mb-1">
+                          Shop Longitude (`shopLng`)
+                        </label>
+                        <input
+                          type="number"
+                          step="any"
+                          value={shopDraft.shopLng}
+                          onChange={(e) =>
+                            setShopDraft((prev) => ({
+                              ...prev,
+                              shopLng:
+                                e.target.value === ''
+                                  ? 0
+                                  : Number(e.target.value),
+                            }))
+                          }
+                          className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm font-mono tabular-nums focus:border-[#d90429] focus:outline-none"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-[#1d1e2c] mb-1">
+                          সর্বোচ্চ ডেলিভারি সীমা (km)
+                        </label>
+                        <input
+                          type="number"
+                          min={0.5}
+                          max={100}
+                          step="0.5"
+                          value={shopDraft.maxDeliveryKm}
+                          onChange={(e) => {
+                            const nextKm =
+                              e.target.value === ''
+                                ? 5
+                                : Number(e.target.value);
+                            setShopDraft((prev) => ({
+                              ...prev,
+                              maxDeliveryKm: nextKm,
+                              deliveryRadiusText:
+                                Number.isFinite(nextKm) && nextKm > 0
+                                  ? `${toBengaliDigits(nextKm)} কিমি`
+                                  : prev.deliveryRadiusText,
+                            }));
+                          }}
+                          className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm font-bold tabular-nums focus:border-[#d90429] focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs pt-1">
+                      <span className="text-slate-500">
+                        বর্তমান পিন:{' '}
+                        <strong className="font-mono text-[#1d1e2c]">
+                          {Number(shopDraft.shopLat || 0).toFixed(4)},{' '}
+                          {Number(shopDraft.shopLng || 0).toFixed(4)}
+                        </strong>
+                      </span>
+                      <a
+                        href={buildGoogleMapsLink(
+                          Number(shopDraft.shopLat) || DEFAULT_SHOP_CONFIG.shopLat,
+                          Number(shopDraft.shopLng) || DEFAULT_SHOP_CONFIG.shopLng
+                        )}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-bold text-emerald-700 hover:underline inline-flex items-center gap-1"
+                      >
+                        <span>ম্যাপে দেখুন</span>
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    </div>
+                  </div>
+
                   <div className="pt-2 flex flex-wrap items-center justify-between gap-3">
                     <button
                       type="submit"
@@ -926,80 +1354,138 @@ export function AdminPanelModal({
 
                   {/* Existing Dishes List */}
                   <div>
-                    <h3 className="text-sm font-bold text-[#1d1e2c] mb-3">
-                      বর্তমান মেনু তালিকা ({dishes.length}টি পদ)
-                    </h3>
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                      <h3 className="text-sm font-bold text-[#1d1e2c]">
+                        বর্তমান মেনু তালিকা ({toBengaliDigits(dishes.length)}টি পদ)
+                      </h3>
+                      {dishes.some((d) => d.inStock === false) && (
+                        <span className="px-2.5 py-1 rounded-lg bg-red-50 border border-red-200 text-[#d90429] text-xs font-bold tabular-nums">
+                          🚫 {toBengaliDigits(dishes.filter((d) => d.inStock === false).length)}টি শেষ (Sold Out)
+                        </span>
+                      )}
+                    </div>
                     <div className="space-y-2.5">
-                      {dishes.map((dish) => (
-                        <div
-                          key={dish.id}
-                          className="flex items-center gap-3 p-2.5 rounded-2xl bg-white border border-slate-200"
-                        >
-                          <FoodImage
-                            src={dish.image}
-                            alt={dish.name}
-                            className="w-16 h-14 rounded-xl object-cover shrink-0"
-                          />
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm font-bold text-[#1d1e2c] truncate">
-                              {dish.name}
-                            </p>
-                            <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5 tabular-nums">
-                              <span className="font-bold text-[#d90429]">
-                                {formatRupees(dish.price)}
-                              </span>
-                              {dish.oldPrice && (
-                                <span className="line-through">
-                                  {formatRupees(dish.oldPrice)}
+                      {dishes.map((dish) => {
+                        const isInStock = dish.inStock !== false;
+                        return (
+                          <div
+                            key={dish.id}
+                            className={`flex flex-col sm:flex-row sm:items-center gap-3 p-3 rounded-2xl border transition-colors ${
+                              isInStock
+                                ? 'bg-white border-slate-200'
+                                : 'bg-red-50/45 border-red-200/90'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3 min-w-0 flex-1">
+                              <FoodImage
+                                src={dish.image}
+                                alt={dish.name}
+                                className={`w-16 h-14 rounded-xl object-cover shrink-0 transition-all ${
+                                  isInStock ? '' : 'grayscale opacity-70'
+                                }`}
+                              />
+                              <div className="min-w-0 flex-1">
+                                <p
+                                  className={`text-sm font-bold truncate ${
+                                    isInStock
+                                      ? 'text-[#1d1e2c]'
+                                      : 'text-slate-600 line-through'
+                                  }`}
+                                >
+                                  {dish.name}
+                                </p>
+                                <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5 tabular-nums">
+                                  <span className="font-bold text-[#d90429]">
+                                    {formatRupees(dish.price)}
+                                  </span>
+                                  {dish.oldPrice && (
+                                    <span className="line-through">
+                                      {formatRupees(dish.oldPrice)}
+                                    </span>
+                                  )}
+                                  <span>•</span>
+                                  <span>
+                                    {dish.category === 'biryani'
+                                      ? 'বিরিয়ানি'
+                                      : 'চাউমিন ও রোল'}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center justify-between sm:justify-end gap-2 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 shrink-0">
+                              {/* 1-Tap In Stock / Sold Out Toggle Switch */}
+                              <button
+                                type="button"
+                                role="switch"
+                                aria-checked={isInStock}
+                                aria-label={`${dish.name} স্টক স্ট্যাটাস পরিবর্তন করুন`}
+                                onClick={() => handleToggleDishStock(dish)}
+                                className={`min-h-[38px] px-2.5 py-1.5 rounded-xl border text-xs font-bold inline-flex items-center gap-2 transition-all cursor-pointer ${
+                                  isInStock
+                                    ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-800'
+                                    : 'bg-red-50 hover:bg-red-100 border-red-300 text-[#d90429]'
+                                }`}
+                              >
+                                <span
+                                  aria-hidden="true"
+                                  className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                                    isInStock ? 'bg-emerald-600' : 'bg-[#d90429]'
+                                  }`}
+                                >
+                                  <span
+                                    className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+                                      isInStock
+                                        ? 'translate-x-4.5'
+                                        : 'translate-x-1'
+                                    }`}
+                                  />
                                 </span>
-                              )}
-                              <span>•</span>
-                              <span>
-                                {dish.category === 'biryani'
-                                  ? 'বিরিয়ানি'
-                                  : 'চাউমিন ও রোল'}
-                              </span>
+                                <span className="whitespace-nowrap">
+                                  {isInStock
+                                    ? '✅ উপলব্ধ / In Stock'
+                                    : '🚫 শেষ হয়ে গেছে / Sold Out'}
+                                </span>
+                              </button>
+
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleEditDish(dish)}
+                                  aria-label={`${dish.name} এডিট করুন`}
+                                  className="w-9 h-9 rounded-xl bg-slate-100 hover:bg-[#ff9f1c]/25 text-[#1d1e2c] flex items-center justify-center transition-colors cursor-pointer"
+                                >
+                                  <Pencil className="w-4 h-4" />
+                                </button>
+
+                                {pendingDeleteId === dish.id ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteDish(dish.id)}
+                                    className="px-2.5 h-9 rounded-xl bg-[#d90429] text-white text-xs font-bold cursor-pointer"
+                                  >
+                                    মুছুন
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => setPendingDeleteId(dish.id)}
+                                    aria-label={`${dish.name} মুছে ফেলুন`}
+                                    className="w-9 h-9 rounded-xl bg-red-50 hover:bg-red-100 text-[#d90429] flex items-center justify-center transition-colors cursor-pointer"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           </div>
-
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <button
-                              type="button"
-                              onClick={() => handleEditDish(dish)}
-                              aria-label={`${dish.name} এডিট করুন`}
-                              className="w-9 h-9 rounded-xl bg-slate-100 hover:bg-[#ff9f1c]/25 text-[#1d1e2c] flex items-center justify-center transition-colors cursor-pointer"
-                            >
-                              <Pencil className="w-4 h-4" />
-                            </button>
-
-                            {pendingDeleteId === dish.id ? (
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteDish(dish.id)}
-                                className="px-2.5 h-9 rounded-xl bg-[#d90429] text-white text-xs font-bold cursor-pointer"
-                              >
-                                মুছুন
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => setPendingDeleteId(dish.id)}
-                                aria-label={`${dish.name} মুছে ফেলুন`}
-                                className="w-9 h-9 rounded-xl bg-red-50 hover:bg-red-100 text-[#d90429] flex items-center justify-center transition-colors cursor-pointer"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
               )}
             </div>
-          </>
-        )}
       </div>
     </div>
   );

@@ -1,5 +1,7 @@
 import type {
+  CloudOrder,
   CustomerReview,
+  DeveloperControlConfig,
   Dish,
   Language,
   SavedOrder,
@@ -11,9 +13,12 @@ export const STORAGE_KEYS = {
   SHOP: 'royal_biryani_shop_v1',
   MENU: 'royal_biryani_menu_v1',
   SPIN: 'royal_biryani_spin_v1',
+  SPIN_REWARDS: 'royal_biryani_spin_rewards_v1',
+  DEVELOPER_CONTROL: 'royal_biryani_dev_ctrl_v1',
   CART: 'royal_biryani_cart_v1',
   LANG: 'royal_biryani_lang_v1',
   ORDERS: 'royal_biryani_orders_v1',
+  CLOUD_ORDERS_CACHE: 'royal_biryani_cloud_orders_log_v1',
   REVIEWS: 'royal_biryani_reviews_v1',
   THEME: 'royal_biryani_theme_v1',
 } as const;
@@ -34,6 +39,9 @@ export const DEFAULT_SHOP_CONFIG: ShopConfig = {
   serviceChargeValue: 5,
   serviceChargeLabel: 'প্যাকেজিং ও GST চার্জ',
   deliveryRadiusText: '৫ কিমি',
+  shopLat: 22.5726,
+  shopLng: 88.3639,
+  maxDeliveryKm: 5,
 };
 
 export const DEFAULT_MENU: Dish[] = [
@@ -51,6 +59,7 @@ export const DEFAULT_MENU: Dish[] = [
     image:
       'https://images.unsplash.com/photo-1633945274405-b6c8069047b0?auto=format&fit=crop&w=800&q=80',
     badge: '🔥 বেস্টসেলার',
+    inStock: true,
   },
   {
     id: 'shahi-mutton-biryani',
@@ -66,6 +75,7 @@ export const DEFAULT_MENU: Dish[] = [
     image:
       'https://images.unsplash.com/photo-1589302168068-964664d93dc0?auto=format&fit=crop&w=800&q=80',
     badge: '⭐ শেফ স্পেশাল',
+    inStock: true,
   },
   {
     id: 'egg-chicken-biryani',
@@ -81,6 +91,7 @@ export const DEFAULT_MENU: Dish[] = [
     image:
       'https://images.unsplash.com/photo-1642821373181-696a54913e93?auto=format&fit=crop&w=800&q=80',
     badge: '🔥 বেস্টসেলার',
+    inStock: true,
   },
   {
     id: 'egg-chicken-chowmein',
@@ -96,6 +107,7 @@ export const DEFAULT_MENU: Dish[] = [
     image:
       'https://images.unsplash.com/photo-1585032226651-759b368d7246?auto=format&fit=crop&w=800&q=80',
     badge: '🔥 বেস্টসেলার',
+    inStock: true,
   },
   {
     id: 'double-egg-chicken-roll',
@@ -111,6 +123,7 @@ export const DEFAULT_MENU: Dish[] = [
     image:
       'https://images.unsplash.com/photo-1626700051175-6818013e1d4f?auto=format&fit=crop&w=800&q=80',
     badge: '⭐ শেফ স্পেশাল',
+    inStock: true,
   },
   {
     id: 'mixed-chowmein',
@@ -126,6 +139,7 @@ export const DEFAULT_MENU: Dish[] = [
     image:
       'https://images.unsplash.com/photo-1617093727343-374698b1b08d?auto=format&fit=crop&w=800&q=80',
     badge: '',
+    inStock: true,
   },
 ];
 
@@ -217,7 +231,10 @@ export function loadMenuDishes(): Dish[] {
     if (!raw) return DEFAULT_MENU;
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed as Dish[];
+      return (parsed as Dish[]).map((d) => ({
+        ...d,
+        inStock: d.inStock !== false,
+      }));
     }
     return DEFAULT_MENU;
   } catch {
@@ -314,6 +331,69 @@ export function loadCustomerReviews(): CustomerReview[] {
     return DEFAULT_REVIEWS;
   } catch {
     return DEFAULT_REVIEWS;
+  }
+}
+
+export const DEFAULT_DEVELOPER_CONTROL: DeveloperControlConfig = {
+  serviceActive: true,
+  subscriptionExpiry: '2027-12-31',
+  developerBrandName: 'Soumdip Digital',
+  developerWhatsapp: '918649853354',
+};
+
+export function loadSpinRewards(): SpinSlice[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.SPIN_REWARDS);
+    if (!raw) return SPIN_SLICES;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed as SpinSlice[];
+    }
+    return SPIN_SLICES;
+  } catch {
+    return SPIN_SLICES;
+  }
+}
+
+export function loadDeveloperControl(): DeveloperControlConfig {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.DEVELOPER_CONTROL);
+    if (!raw) return DEFAULT_DEVELOPER_CONTROL;
+    const parsed = JSON.parse(raw) as Partial<DeveloperControlConfig>;
+    return {
+      ...DEFAULT_DEVELOPER_CONTROL,
+      ...parsed,
+    };
+  } catch {
+    return DEFAULT_DEVELOPER_CONTROL;
+  }
+}
+
+export function isSubscriptionBlocked(
+  ctrl: DeveloperControlConfig,
+  todayKey: string
+): { blocked: boolean; reason: 'paused' | 'expired' | null } {
+  if (!ctrl.serviceActive) {
+    return { blocked: true, reason: 'paused' };
+  }
+  const expiry = (ctrl.subscriptionExpiry || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(expiry) && todayKey > expiry) {
+    return { blocked: true, reason: 'expired' };
+  }
+  return { blocked: false, reason: null };
+}
+
+export function loadCachedCloudOrders(): CloudOrder[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.CLOUD_ORDERS_CACHE);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.slice(0, 100) as CloudOrder[];
+    }
+    return [];
+  } catch {
+    return [];
   }
 }
 

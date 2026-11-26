@@ -1,39 +1,73 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { User } from 'firebase/auth';
 import { Gift, Sparkles } from 'lucide-react';
 import { AdminPanelModal } from './components/AdminPanelModal';
 import { BottomCheckoutBar } from './components/BottomCheckoutBar';
 import { ConfettiBurst } from './components/ConfettiBurst';
 import { DeliveryCheckoutSection } from './components/DeliveryCheckoutSection';
+import { DeveloperControlModal } from './components/DeveloperControlModal';
 import { HeroHeader } from './components/HeroHeader';
 import { MenuSection } from './components/MenuSection';
 import { RepeatOrderCard } from './components/RepeatOrderCard';
 import { ReviewsSection } from './components/ReviewsSection';
+import {
+  SecretPinModal,
+  type PinUnlockTarget,
+} from './components/SecretPinModal';
+import { ServicePausedOverlay } from './components/ServicePausedOverlay';
 import { SpinWheelModal } from './components/SpinWheelModal';
 import { WhatsAppOrderModal } from './components/WhatsAppOrderModal';
 import {
   BASE_HISTORICAL_RATING_SUM,
   BASE_HISTORICAL_REVIEW_COUNT,
   STORAGE_KEYS,
+  isSubscriptionBlocked,
+  loadCachedCloudOrders,
   loadCustomerReviews,
   loadDarkMode,
+  loadDeveloperControl,
   loadLanguage,
   loadMenuDishes,
   loadSavedOrders,
   loadShopConfig,
+  loadSpinRewards,
 } from './data/defaults';
+import {
+  SHOP_ID,
+  generateOrderCode,
+  generateOrderDocId,
+  saveCloudOrderToFirestore,
+  signInWithGoogleForAdmin,
+  signOutAdmin,
+  subscribeAdminAuth,
+  subscribeToCloudOrders,
+  subscribeToShopTenant,
+  syncShopTenantToCloud,
+  updateCloudOrderStatus,
+  type CloudWriteResult,
+} from './firebase';
 import type {
+  CloudOrder,
+  CloudOrderItem,
+  CloudSyncStatus,
   CustomerDetails,
+  CustomerLocation,
   CustomerReview,
+  DeveloperControlConfig,
   Dish,
   Language,
   MenuCategory,
+  OrderPricing,
+  OrderStatus,
   SavedOrder,
   SavedOrderItem,
   SavedSpinRecord,
   ShopConfig,
   SpinPrizeId,
+  SpinSlice,
 } from './types';
 import { getTodayKey, normalizePhoneDigits } from './utils/bengali';
+import { buildGoogleMapsLink, calculateRoadDistanceKm } from './utils/geo';
 import { getDishCopy, getShopCopy, getSpinSliceCopy } from './utils/i18n';
 import {
   buildWhatsAppOrder,
@@ -60,6 +94,24 @@ export default function App() {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => loadDarkMode());
   const [shop, setShop] = useState<ShopConfig>(() => loadShopConfig());
   const [dishes, setDishes] = useState<Dish[]>(() => loadMenuDishes());
+  const [spinRewards, setSpinRewards] = useState<SpinSlice[]>(() =>
+    loadSpinRewards()
+  );
+  const [developerControl, setDeveloperControl] =
+    useState<DeveloperControlConfig>(() => loadDeveloperControl());
+
+  // Multi-tenant Firebase Cloud Sync & Admin Auth state
+  const [cloudStatus, setCloudStatus] =
+    useState<CloudSyncStatus>('local-fallback');
+  const [adminUser, setAdminUser] = useState<User | null>(null);
+
+  // Permanent Tamper-Proof Cloud Order Log (Firestore + localStorage offline fallback)
+  const [localCloudOrders, setLocalCloudOrders] = useState<CloudOrder[]>(() =>
+    loadCachedCloudOrders()
+  );
+  const [firestoreOrders, setFirestoreOrders] = useState<CloudOrder[]>([]);
+  const [ordersError, setOrdersError] = useState<string | null>(null);
+
   const [activeCategory, setActiveCategory] = useState<MenuCategory>('all');
   const [cart, setCart] = useState<Record<string, number>>({});
 
@@ -88,20 +140,23 @@ export default function App() {
         name: past[0].customer.name || '',
         phone: past[0].customer.phone || '',
         address: past[0].customer.address || '',
+        location: past[0].customer.location ?? null,
       };
     }
-    return { name: '', phone: '', address: '' };
+    return { name: '', phone: '', address: '', location: null };
   });
   const [formErrors, setFormErrors] = useState<
     Partial<Record<keyof CustomerDetails | 'cart', string>>
   >({});
 
-  // WhatsApp Receipt & Admin Modal states
+  // WhatsApp Receipt, PIN Gate, Owner Admin & Developer Control Modal states
   const [whatsappOrder, setWhatsappOrder] = useState<{
     receiptText: string;
     whatsappUrl: string;
   } | null>(null);
+  const [pinModalOpen, setPinModalOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
+  const [devPanelOpen, setDevPanelOpen] = useState(false);
 
   // Lightweight toast notification & section refs
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -111,6 +166,107 @@ export default function App() {
   const secretTapTimestampsRef = useRef<number[]>([]);
 
   const isBn = lang === 'bn';
+
+  // Real-time Firestore sync (`shops/{SHOP_ID}`) with graceful localStorage fallback
+  useEffect(() => {
+    const unsubscribe = subscribeToShopTenant((remote) => {
+      if (remote.shopConfig) {
+        setShop(remote.shopConfig);
+        try {
+          localStorage.setItem(
+            STORAGE_KEYS.SHOP,
+            JSON.stringify(remote.shopConfig)
+          );
+        } catch {
+          // Ignore storage quota errors
+        }
+      }
+      if (remote.menuItems) {
+        setDishes(remote.menuItems);
+        try {
+          localStorage.setItem(
+            STORAGE_KEYS.MENU,
+            JSON.stringify(remote.menuItems)
+          );
+        } catch {
+          // Ignore storage quota errors
+        }
+      }
+      if (remote.spinRewards) {
+        setSpinRewards(remote.spinRewards);
+        try {
+          localStorage.setItem(
+            STORAGE_KEYS.SPIN_REWARDS,
+            JSON.stringify(remote.spinRewards)
+          );
+        } catch {
+          // Ignore storage quota errors
+        }
+      }
+      if (remote.developerControl) {
+        setDeveloperControl(remote.developerControl);
+        try {
+          localStorage.setItem(
+            STORAGE_KEYS.DEVELOPER_CONTROL,
+            JSON.stringify(remote.developerControl)
+          );
+        } catch {
+          // Ignore storage quota errors
+        }
+      }
+    }, setCloudStatus);
+
+    return () => unsubscribe();
+  }, []);
+
+  // Track Google Auth user for authenticated Firestore admin/developer writes
+  useEffect(() => {
+    const unsubscribe = subscribeAdminAuth((user) => {
+      setAdminUser(user);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Real-time Live Orders listener (`shops/{SHOP_ID}/orders`) — attached only when admin is signed in
+  useEffect(() => {
+    if (!adminUser) {
+      setFirestoreOrders([]);
+      setOrdersError(null);
+      return;
+    }
+
+    setOrdersError(null);
+    const unsubscribe = subscribeToCloudOrders(
+      (remoteOrders) => {
+        setFirestoreOrders(remoteOrders);
+        setOrdersError(null);
+      },
+      (errMsg) => {
+        setOrdersError(errMsg);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [adminUser]);
+
+  // Merge Firestore live orders with local fallback records (newest first, deduplicated by docId)
+  const allAdminOrders = useMemo(() => {
+    const map = new Map<string, CloudOrder>();
+    for (const localOrd of localCloudOrders) {
+      map.set(localOrd.docId, localOrd);
+    }
+    for (const cloudOrd of firestoreOrders) {
+      map.set(cloudOrd.docId, cloudOrd);
+    }
+    return Array.from(map.values()).sort(
+      (a, b) => b.timestampMs - a.timestampMs
+    );
+  }, [firestoreOrders, localCloudOrders]);
+
+  const subscriptionState = useMemo(
+    () => isSubscriptionBlocked(developerControl, getTodayKey()),
+    [developerControl]
+  );
 
   useEffect(() => {
     document.documentElement.lang = lang;
@@ -167,9 +323,18 @@ export default function App() {
     recentTaps.push(now);
     if (recentTaps.length >= 5) {
       secretTapTimestampsRef.current = [];
-      setAdminOpen(true);
+      setPinModalOpen(true);
     } else {
       secretTapTimestampsRef.current = recentTaps;
+    }
+  }, []);
+
+  const handlePinUnlock = useCallback((target: PinUnlockTarget) => {
+    setPinModalOpen(false);
+    if (target === 'developer') {
+      setDevPanelOpen(true);
+    } else {
+      setAdminOpen(true);
     }
   }, []);
 
@@ -192,11 +357,14 @@ export default function App() {
   }, []);
 
   const pricing = useMemo(
-    () => calculateOrderPricing(dishes, cart, wonPrizeId, shop, lang),
-    [dishes, cart, wonPrizeId, shop, lang]
+    () => calculateOrderPricing(dishes, cart, wonPrizeId, shop, lang, spinRewards),
+    [dishes, cart, wonPrizeId, shop, lang, spinRewards]
   );
 
-  const wonSlice = useMemo(() => getSpinSliceById(wonPrizeId), [wonPrizeId]);
+  const wonSlice = useMemo(
+    () => getSpinSliceById(wonPrizeId, spinRewards),
+    [wonPrizeId, spinRewards]
+  );
   const wonSliceCopy = useMemo(
     () => (wonSlice ? getSpinSliceCopy(wonSlice, lang) : null),
     [wonSlice, lang]
@@ -242,23 +410,66 @@ export default function App() {
     [dishes]
   );
 
-  const handleUpdateQty = useCallback((dishId: string, delta: number) => {
+  // Automatically remove any dish from active cart if owner marks it Sold Out in real time
+  useEffect(() => {
+    const soldOutInCart = dishes.filter(
+      (d) => d.inStock === false && (cart[d.id] ?? 0) > 0
+    );
+    if (soldOutInCart.length === 0) return;
+
+    const soldOutIds = new Set(soldOutInCart.map((d) => d.id));
     setCart((prev) => {
-      const nextQty = Math.max(0, (prev[dishId] ?? 0) + delta);
-      const next = { ...prev };
-      if (nextQty === 0) {
-        delete next[dishId];
-      } else {
-        next[dishId] = nextQty;
+      const next: Record<string, number> = {};
+      for (const [dishId, qty] of Object.entries(prev)) {
+        if (!soldOutIds.has(dishId) && qty > 0) {
+          next[dishId] = qty;
+        }
       }
       return next;
     });
-    setFormErrors((prev) => {
-      if (!prev.cart) return prev;
-      const { cart: _removed, ...rest } = prev;
-      return rest;
-    });
-  }, []);
+
+    const names = soldOutInCart
+      .map((d) => getDishCopy(d, lang).name)
+      .join(', ');
+    notify(
+      lang === 'bn'
+        ? `🚫 "${names}" আজকের মতো শেষ হয়ে যাওয়ায় কার্ট থেকে সরানো হয়েছে।`
+        : `🚫 Removed "${names}" from cart because it just sold out.`
+    );
+  }, [cart, dishes, lang, notify]);
+
+  const handleUpdateQty = useCallback(
+    (dishId: string, delta: number) => {
+      if (delta > 0) {
+        const targetDish = dishes.find((d) => d.id === dishId);
+        if (targetDish && targetDish.inStock === false) {
+          notify(
+            lang === 'bn'
+              ? `🚫 দুঃখিত! "${targetDish.name}" আজকের মতো শেষ হয়ে গেছে।`
+              : `🚫 Sorry! "${getDishCopy(targetDish, 'en').name}" is sold out for today.`
+          );
+          return;
+        }
+      }
+
+      setCart((prev) => {
+        const nextQty = Math.max(0, (prev[dishId] ?? 0) + delta);
+        const next = { ...prev };
+        if (nextQty === 0) {
+          delete next[dishId];
+        } else {
+          next[dishId] = nextQty;
+        }
+        return next;
+      });
+      setFormErrors((prev) => {
+        if (!prev.cart) return prev;
+        const { cart: _removed, ...rest } = prev;
+        return rest;
+      });
+    },
+    [dishes, lang, notify]
+  );
 
   const handleSpinWin = useCallback(
     (prizeId: SpinPrizeId) => {
@@ -273,7 +484,7 @@ export default function App() {
       } catch {
         // Ignore storage errors in private browsing modes
       }
-      const slice = getSpinSliceById(prizeId);
+      const slice = getSpinSliceById(prizeId, spinRewards);
       if (slice) {
         const copy = getSpinSliceCopy(slice, lang);
         notify(
@@ -283,11 +494,11 @@ export default function App() {
         );
       }
     },
-    [lang, notify]
+    [lang, notify, spinRewards]
   );
 
   const handleCustomerChange = useCallback(
-    (field: keyof CustomerDetails, value: string) => {
+    (field: 'name' | 'phone' | 'address', value: string) => {
       setCustomer((prev) => ({ ...prev, [field]: value }));
       setFormErrors((prev) => {
         if (!prev[field]) return prev;
@@ -299,29 +510,169 @@ export default function App() {
     []
   );
 
+  const handleLocationChange = useCallback(
+    (location: CustomerLocation | null) => {
+      setCustomer((prev) => ({ ...prev, location }));
+    },
+    []
+  );
+
+  const reportCloudResult = useCallback(
+    (result: CloudWriteResult, successMessage: string) => {
+      if (result.synced) {
+        notify(`☁️ ${successMessage} (সব গ্রাহকের ফোনে লাইভ আপডেট হয়েছে!)`);
+      } else if (result.reason === 'auth_required') {
+        notify(
+          `${successMessage} (স্থানীয়ভাবে সেভ হয়েছে — ক্লাউড সিঙ্কের জন্য Google লগইন করুন)`
+        );
+      } else if (result.reason === 'permission_denied') {
+        notify(
+          'স্থানীয়ভাবে সেভ হয়েছে — Firestore ক্লাউড রাইটের অনুমতি নেই (অনুমোদিত Google অ্যাকাউন্ট দিয়ে লগইন করুন)'
+        );
+      } else if (result.reason === 'not_configured') {
+        notify(successMessage);
+      } else {
+        notify(`${successMessage} (ক্লাউড সিঙ্ক ব্যর্থ হয়েছে — আবার চেষ্টা করুন)`);
+      }
+    },
+    [notify]
+  );
+
   const handleSaveShop = useCallback(
-    (nextShop: ShopConfig) => {
+    async (nextShop: ShopConfig) => {
       setShop(nextShop);
       try {
         localStorage.setItem(STORAGE_KEYS.SHOP, JSON.stringify(nextShop));
       } catch {
         notify('ছবির সাইজ বড় হওয়ায় সেভ করতে সমস্যা হয়েছে — ছোট ছবি চেষ্টা করুন');
       }
+      const res = await syncShopTenantToCloud(
+        { shopConfig: nextShop },
+        {
+          shopConfig: nextShop,
+          menuItems: dishes,
+          spinRewards,
+          developerControl,
+        }
+      );
+      reportCloudResult(res, 'দোকানের তথ্য সেভ হয়েছে');
     },
-    [notify]
+    [developerControl, dishes, notify, reportCloudResult, spinRewards]
   );
 
   const handleSaveDishes = useCallback(
-    (nextDishes: Dish[]) => {
+    async (nextDishes: Dish[]) => {
       setDishes(nextDishes);
       try {
         localStorage.setItem(STORAGE_KEYS.MENU, JSON.stringify(nextDishes));
       } catch {
         notify('স্টোরেজ পূর্ণ! অনুগ্রহ করে ছবির সাইজ ছোট করুন বা URL ব্যবহার করুন');
       }
+      const res = await syncShopTenantToCloud(
+        { menuItems: nextDishes },
+        {
+          shopConfig: shop,
+          menuItems: nextDishes,
+          spinRewards,
+          developerControl,
+        }
+      );
+      if (res.synced) {
+        notify('☁️ মেনু আপডেট সব গ্রাহকের ফোনে লাইভ সিঙ্ক হয়েছে!');
+      } else if (res.reason === 'permission_denied') {
+        notify('মেনু স্থানীয়ভাবে সেভ হয়েছে (ক্লাউড রাইটের অনুমতি নেই)');
+      }
     },
-    [notify]
+    [developerControl, notify, shop, spinRewards]
   );
+
+  const handleSaveSpinRewards = useCallback(
+    async (nextRewards: SpinSlice[]) => {
+      setSpinRewards(nextRewards);
+      try {
+        localStorage.setItem(
+          STORAGE_KEYS.SPIN_REWARDS,
+          JSON.stringify(nextRewards)
+        );
+      } catch {
+        // Ignore storage errors
+      }
+      const res = await syncShopTenantToCloud(
+        { spinRewards: nextRewards },
+        {
+          shopConfig: shop,
+          menuItems: dishes,
+          spinRewards: nextRewards,
+          developerControl,
+        }
+      );
+      reportCloudResult(res, 'স্পিন পুরস্কার সেভ হয়েছে');
+    },
+    [developerControl, dishes, reportCloudResult, shop]
+  );
+
+  const handleSaveDeveloperControl = useCallback(
+    async (nextControl: DeveloperControlConfig) => {
+      setDeveloperControl(nextControl);
+      try {
+        localStorage.setItem(
+          STORAGE_KEYS.DEVELOPER_CONTROL,
+          JSON.stringify(nextControl)
+        );
+      } catch {
+        // Ignore storage errors
+      }
+      const res = await syncShopTenantToCloud(
+        { developerControl: nextControl },
+        {
+          shopConfig: shop,
+          menuItems: dishes,
+          spinRewards,
+          developerControl: nextControl,
+        }
+      );
+      reportCloudResult(res, 'ডেভেলপার কন্ট্রোল সেভ হয়েছে');
+    },
+    [dishes, reportCloudResult, shop, spinRewards]
+  );
+
+  const handlePushAllToCloud = useCallback(async () => {
+    const res = await syncShopTenantToCloud(
+      {
+        shopConfig: shop,
+        menuItems: dishes,
+        spinRewards,
+        developerControl,
+      },
+      {
+        shopConfig: shop,
+        menuItems: dishes,
+        spinRewards,
+        developerControl,
+      }
+    );
+    reportCloudResult(res, 'সব ডেটা Firestore-এ পাবলিশ হয়েছে');
+  }, [developerControl, dishes, reportCloudResult, shop, spinRewards]);
+
+  const handleSignInGoogle = useCallback(async () => {
+    try {
+      const user = await signInWithGoogleForAdmin();
+      if (user) {
+        notify(`✅ Google লগইন সফল (${user.email})`);
+      }
+    } catch {
+      notify('Google লগইন বাতিল বা ব্যর্থ হয়েছে — আবার চেষ্টা করুন');
+    }
+  }, [notify]);
+
+  const handleSignOutGoogle = useCallback(async () => {
+    try {
+      await signOutAdmin();
+      notify('Google অ্যাকাউন্ট থেকে সাইন আউট হয়েছে');
+    } catch {
+      notify('সাইন আউট করতে সমস্যা হয়েছে');
+    }
+  }, [notify]);
 
   const handleAddReview = useCallback(
     ({
@@ -387,7 +738,137 @@ export default function App() {
     []
   );
 
-  const handlePlaceOrder = useCallback(() => {
+  const recordPermanentCloudOrder = useCallback(
+    async (
+      orderedCart: Record<string, number>,
+      orderPricing: OrderPricing,
+      normalizedCustomer: CustomerDetails
+    ): Promise<string> => {
+      const docId = generateOrderDocId();
+      const orderId = generateOrderCode();
+      const items: CloudOrderItem[] = dishes
+        .filter((d) => (orderedCart[d.id] ?? 0) > 0)
+        .map((d) => {
+          const qty = orderedCart[d.id] ?? 0;
+          return {
+            dishId: d.id,
+            name: d.name,
+            nameEn: getDishCopy(d, 'en').name,
+            qty,
+            unitPrice: d.price,
+            lineTotal: d.price * qty,
+          };
+        });
+
+      const loc = normalizedCustomer.location ?? null;
+      const googleMapsUrl = loc ? buildGoogleMapsLink(loc.lat, loc.lng) : '';
+
+      const orderRecord: CloudOrder = {
+        docId,
+        orderId,
+        shopId: SHOP_ID,
+        timestampMs: Date.now(),
+        customerName: normalizedCustomer.name,
+        customerPhone: normalizedCustomer.phone,
+        address: normalizedCustomer.address,
+        distanceKm: loc ? loc.distanceKm : null,
+        googleMapsUrl,
+        items,
+        finalTotal: orderPricing.finalTotal,
+        spinReward: orderPricing.spinRewardActive
+          ? orderPricing.spinRewardSummary
+          : '',
+        status: 'Pending',
+        source: 'local',
+      };
+
+      // Immediately persist local fallback backup
+      setLocalCloudOrders((prev) => {
+        const next = [orderRecord, ...prev].slice(0, 100);
+        try {
+          localStorage.setItem(
+            STORAGE_KEYS.CLOUD_ORDERS_CACHE,
+            JSON.stringify(next)
+          );
+        } catch {
+          // Ignore storage quota issues
+        }
+        return next;
+      });
+
+      // Save permanently to Firestore `shops/{SHOP_ID}/orders` BEFORE launching WhatsApp
+      const result = await saveCloudOrderToFirestore(orderRecord);
+      if (result.savedToCloud) {
+        setLocalCloudOrders((prev) => {
+          const next = prev.map((o) =>
+            o.docId === docId ? { ...o, source: 'cloud' as const } : o
+          );
+          try {
+            localStorage.setItem(
+              STORAGE_KEYS.CLOUD_ORDERS_CACHE,
+              JSON.stringify(next)
+            );
+          } catch {
+            // Ignore storage errors
+          }
+          return next;
+        });
+      }
+
+      return orderId;
+    },
+    [dishes]
+  );
+
+  const handleUpdateOrderStatus = useCallback(
+    async (order: CloudOrder, nextStatus: OrderStatus) => {
+      // Optimistically update local cache
+      setLocalCloudOrders((prev) => {
+        const exists = prev.some((o) => o.docId === order.docId);
+        const next = exists
+          ? prev.map((o) =>
+              o.docId === order.docId ? { ...o, status: nextStatus } : o
+            )
+          : prev;
+        try {
+          localStorage.setItem(
+            STORAGE_KEYS.CLOUD_ORDERS_CACHE,
+            JSON.stringify(next)
+          );
+        } catch {
+          // Ignore storage errors
+        }
+        return next;
+      });
+
+      if (order.source === 'cloud' && adminUser) {
+        const res = await updateCloudOrderStatus(order.docId, nextStatus);
+        if (res.updated) {
+          notify(`✅ অর্ডার ${order.orderId} স্ট্যাটাস আপডেট হয়েছে: ${nextStatus}`);
+        } else {
+          notify(`⚠️ স্ট্যাটাস ক্লাউডে আপডেট হয়নি — Google লগইন যাচাই করুন`);
+        }
+      } else {
+        notify(`✅ অর্ডার ${order.orderId} স্ট্যাটাস আপডেট হয়েছে: ${nextStatus}`);
+      }
+    },
+    [adminUser, notify]
+  );
+
+  const handlePlaceOrder = useCallback(async () => {
+    const soldOutInCart = dishes.filter(
+      (d) => (cart[d.id] ?? 0) > 0 && d.inStock === false
+    );
+    if (soldOutInCart.length > 0) {
+      const names = soldOutInCart.map((d) => getDishCopy(d, lang).name).join(', ');
+      notify(
+        isBn
+          ? `🚫 "${names}" আজকের মতো শেষ হয়ে গেছে — অনুগ্রহ করে অন্য খাবার বেছে নিন।`
+          : `🚫 "${names}" is currently Sold Out — please choose available dishes.`
+      );
+      return;
+    }
+
     const errors: Partial<Record<keyof CustomerDetails | 'cart', string>> = {};
 
     if (pricing.itemCount === 0) {
@@ -438,12 +919,34 @@ export default function App() {
       return;
     }
 
+    const refreshedLocation: CustomerLocation | null = customer.location
+      ? {
+          lat: customer.location.lat,
+          lng: customer.location.lng,
+          distanceKm: calculateRoadDistanceKm(
+            shop.shopLat,
+            shop.shopLng,
+            customer.location.lat,
+            customer.location.lng
+          ),
+        }
+      : null;
+
     const normalizedCustomer: CustomerDetails = {
       name: customer.name.trim(),
       phone: phoneDigits,
       address: customer.address.trim(),
+      location: refreshedLocation,
     };
 
+    // 1. Permanently log order to Firestore (`shops/{SHOP_ID}/orders`) BEFORE opening WhatsApp
+    const orderId = await recordPermanentCloudOrder(
+      cart,
+      pricing,
+      normalizedCustomer
+    );
+
+    // 2. Build WhatsApp receipt including the unique Order ID
     const orderPayload = buildWhatsAppOrder(
       shop,
       dishes,
@@ -451,7 +954,9 @@ export default function App() {
       normalizedCustomer,
       wonPrizeId,
       pricing,
-      lang
+      lang,
+      spinRewards,
+      orderId
     );
 
     persistOrderHistory(cart, pricing.finalTotal, normalizedCustomer);
@@ -466,30 +971,45 @@ export default function App() {
     notify,
     persistOrderHistory,
     pricing,
+    recordPermanentCloudOrder,
     shop,
+    spinRewards,
     wonPrizeId,
   ]);
 
   const buildCartFromSavedOrder = useCallback(
-    (order: SavedOrder): Record<string, number> => {
-      const validIds = new Set(dishes.map((d) => d.id));
+    (
+      order: SavedOrder
+    ): { nextCart: Record<string, number>; soldOutNames: string[] } => {
+      const dishMap = new Map(dishes.map((d) => [d.id, d]));
       const nextCart: Record<string, number> = {};
+      const soldOutNames: string[] = [];
+
       for (const item of order.items) {
-        if (validIds.has(item.dishId) && item.qty > 0) {
-          nextCart[item.dishId] = item.qty;
+        if (item.qty <= 0) continue;
+        const liveDish = dishMap.get(item.dishId);
+        if (!liveDish) continue;
+        if (liveDish.inStock === false) {
+          soldOutNames.push(getDishCopy(liveDish, lang).name);
+          continue;
         }
+        nextCart[item.dishId] = item.qty;
       }
-      return nextCart;
+      return { nextCart, soldOutNames };
     },
-    [dishes]
+    [dishes, lang]
   );
 
   const handleLoadOrderToCart = useCallback(
     (order: SavedOrder) => {
-      const nextCart = buildCartFromSavedOrder(order);
+      const { nextCart, soldOutNames } = buildCartFromSavedOrder(order);
       if (Object.keys(nextCart).length === 0) {
         notify(
-          isBn
+          soldOutNames.length > 0
+            ? isBn
+              ? `🚫 আগের অর্ডারের খাবার (${soldOutNames.join(', ')}) আজকের মতো শেষ হয়ে গেছে!`
+              : `🚫 Items from that order (${soldOutNames.join(', ')}) are currently Sold Out!`
+            : isBn
             ? 'আগের অর্ডারের খাবারগুলো বর্তমানে মেনুতে পাওয়া যায়নি।'
             : 'Items from that previous order are no longer on the menu.'
         );
@@ -503,11 +1023,16 @@ export default function App() {
         address: prev.address.trim()
           ? prev.address
           : order.customer.address || '',
+        location: prev.location ?? order.customer.location ?? null,
       }));
       setFormErrors({});
 
       notify(
-        isBn
+        soldOutNames.length > 0
+          ? isBn
+            ? `কার্টে উপলব্ধ খাবার যোগ হয়েছে ("${soldOutNames.join(', ')}" আজ শেষ হওয়ায় বাদ দেওয়া হয়েছে)`
+            : `Available items loaded to cart (skipped Sold Out: "${soldOutNames.join(', ')}")`
+          : isBn
           ? 'আগের অর্ডারের খাবারগুলো কার্টে যোগ হয়েছে — চাইলে পরিবর্তন করুন!'
           : 'Previous order items loaded to cart — adjust anytime!'
       );
@@ -516,8 +1041,17 @@ export default function App() {
   );
 
   const handleQuickReorder = useCallback(
-    (order: SavedOrder) => {
-      const nextCart = buildCartFromSavedOrder(order);
+    async (order: SavedOrder) => {
+      const { nextCart, soldOutNames } = buildCartFromSavedOrder(order);
+      if (soldOutNames.length > 0) {
+        notify(
+          isBn
+            ? `🚫 দুঃখিত! আগের অর্ডারের "${soldOutNames.join(', ')}" আজকের মতো শেষ (Sold Out)।`
+            : `🚫 Sorry! "${soldOutNames.join(', ')}" from your previous order is currently Sold Out.`
+        );
+        return;
+      }
+
       if (Object.keys(nextCart).length === 0) {
         notify(
           isBn
@@ -527,12 +1061,27 @@ export default function App() {
         return;
       }
 
+      const rawLocation = customer.location ?? order.customer.location ?? null;
+      const refreshedLocation: CustomerLocation | null = rawLocation
+        ? {
+            lat: rawLocation.lat,
+            lng: rawLocation.lng,
+            distanceKm: calculateRoadDistanceKm(
+              shop.shopLat,
+              shop.shopLng,
+              rawLocation.lat,
+              rawLocation.lng
+            ),
+          }
+        : null;
+
       const resolvedCustomer: CustomerDetails = {
         name: customer.name.trim() || order.customer.name || '',
         phone: normalizePhoneDigits(
           customer.phone.trim() || order.customer.phone || ''
         ),
         address: customer.address.trim() || order.customer.address || '',
+        location: refreshedLocation,
       };
 
       setCart(nextCart);
@@ -562,7 +1111,15 @@ export default function App() {
         nextCart,
         wonPrizeId,
         shop,
-        lang
+        lang,
+        spinRewards
+      );
+
+      // Save permanently to Firestore (`shops/{SHOP_ID}/orders`) BEFORE opening WhatsApp
+      const orderId = await recordPermanentCloudOrder(
+        nextCart,
+        freshPricing,
+        resolvedCustomer
       );
 
       const orderPayload = buildWhatsAppOrder(
@@ -572,7 +1129,9 @@ export default function App() {
         resolvedCustomer,
         wonPrizeId,
         freshPricing,
-        lang
+        lang,
+        spinRewards,
+        orderId
       );
 
       persistOrderHistory(nextCart, freshPricing.finalTotal, resolvedCustomer);
@@ -587,10 +1146,23 @@ export default function App() {
       launchWhatsAppModal,
       notify,
       persistOrderHistory,
+      recordPermanentCloudOrder,
       shop,
+      spinRewards,
       wonPrizeId,
     ]
   );
+
+  const developerInquiryUrl = useMemo(() => {
+    const devPhone =
+      developerControl.developerWhatsapp.replace(/\D/g, '') || '918649853354';
+    const devName =
+      developerControl.developerBrandName.trim() || 'Soumdip Digital';
+    const text = isBn
+      ? `নমস্কার ${devName}! আমি "${shop.name}"-এর অনলাইন ফুড অর্ডার ও স্পিন হুইল অ্যাপটি দেখলাম। আমার দোকানের জন্য এমন একটি অ্যাপ বানাতে চাই। বিস্তারিত জানাবেন।`
+      : `Hello ${devName}! I saw the digital menu & WhatsApp ordering app for "${shopCopy.name}". I want to build a similar app for my shop. Please share details.`;
+    return `https://wa.me/${devPhone}?text=${encodeURIComponent(text)}`;
+  }, [developerControl, isBn, shop.name, shopCopy.name]);
 
   return (
     <div className="min-h-screen bg-[#f4f5f7] dark:bg-[#11121a] text-[#1d1e2c] dark:text-slate-100 pb-40 transition-colors duration-200">
@@ -695,6 +1267,7 @@ export default function App() {
           customer={customer}
           errors={formErrors}
           onCustomerChange={handleCustomerChange}
+          onLocationChange={handleLocationChange}
           onPlaceOrder={handlePlaceOrder}
         />
 
@@ -709,8 +1282,8 @@ export default function App() {
         />
       </main>
 
-      {/* Clean Footer with Hidden 5-Tap Secret Admin Trigger */}
-      <footer className="max-w-5xl mx-auto px-4 sm:px-6 mt-10 pt-6 border-t border-slate-200/90 dark:border-white/10 text-center">
+      {/* Clean Footer with Hidden 5-Tap Secret Trigger & Clickable Developer Credit Badge */}
+      <footer className="max-w-5xl mx-auto px-4 sm:px-6 mt-10 pt-6 border-t border-slate-200/90 dark:border-white/10 text-center space-y-4">
         <div
           onClick={handleSecretFooterTap}
           className="inline-block select-none"
@@ -729,10 +1302,38 @@ export default function App() {
             {isBn ? 'সর্বস্বত্ব সংরক্ষিত' : 'All Rights Reserved'}
           </p>
         </div>
+
+        {/* Sleek Developer Credit Footer Badge */}
+        <div className="pt-1 flex justify-center">
+          <div className="inline-flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1 px-4 py-2 rounded-2xl bg-white dark:bg-[#1a1b26] border border-slate-200/90 dark:border-white/10 shadow-xs text-[11px] sm:text-xs">
+            <span
+              onClick={handleSecretFooterTap}
+              className="font-bold text-[#1d1e2c] dark:text-slate-100 select-none cursor-default"
+            >
+              ⚡ Powered by{' '}
+              <span className="text-[#d90429] dark:text-[#ff9f1c]">
+                {developerControl.developerBrandName}
+              </span>
+            </span>
+            <span className="text-slate-300 dark:text-slate-600 select-none">
+              •
+            </span>
+            <a
+              href={developerInquiryUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-semibold text-emerald-700 dark:text-emerald-400 hover:underline transition-colors"
+            >
+              {isBn
+                ? 'আপনার দোকানের জন্য এমন অ্যাপ বানাতে ক্লিক করুন'
+                : 'Want an app like this for your shop? Click here'}
+            </a>
+          </div>
+        </div>
       </footer>
 
-      {/* Floating Spin & Win Reopen Trigger Button (when modal is closed) */}
-      {!spinModalOpen && (
+      {/* Floating Spin & Win Reopen Trigger Button (when modal is closed & service active) */}
+      {!spinModalOpen && !subscriptionState.blocked && (
         <button
           type="button"
           onClick={() => setSpinModalOpen(true)}
@@ -753,17 +1354,20 @@ export default function App() {
       )}
 
       {/* Fixed Bottom Checkout Bar + Free Home Delivery Strip */}
-      <BottomCheckoutBar
-        shop={shop}
-        lang={lang}
-        pricing={pricing}
-        onCheckoutClick={handlePlaceOrder}
-      />
+      {!subscriptionState.blocked && (
+        <BottomCheckoutBar
+          shop={shop}
+          lang={lang}
+          pricing={pricing}
+          onCheckoutClick={handlePlaceOrder}
+        />
+      )}
 
       {/* Spin & Win Modal */}
       <SpinWheelModal
-        isOpen={spinModalOpen}
+        isOpen={spinModalOpen && !subscriptionState.blocked}
         lang={lang}
+        spinRewards={spinRewards}
         onClose={() => setSpinModalOpen(false)}
         wonPrizeId={wonPrizeId}
         onWin={handleSpinWin}
@@ -771,21 +1375,62 @@ export default function App() {
 
       {/* WhatsApp Receipt Confirmation Modal */}
       <WhatsAppOrderModal
-        isOpen={Boolean(whatsappOrder)}
+        isOpen={Boolean(whatsappOrder) && !subscriptionState.blocked}
         lang={lang}
         receiptText={whatsappOrder?.receiptText ?? ''}
         whatsappUrl={whatsappOrder?.whatsappUrl ?? ''}
         onClose={() => setWhatsappOrder(null)}
       />
 
-      {/* PIN-Protected Owner Admin Panel Modal */}
+      {/* Full-Screen Service Paused / Subscription Expired Overlay */}
+      {subscriptionState.blocked && subscriptionState.reason && (
+        <ServicePausedOverlay
+          shopName={shopCopy.name}
+          developerControl={developerControl}
+          reason={subscriptionState.reason}
+          lang={lang}
+          onSecretCreditTap={handleSecretFooterTap}
+        />
+      )}
+
+      {/* Unified Hidden PIN Gate Modal (2026 -> Shop Owner Admin | 9999 -> Developer Control) */}
+      <SecretPinModal
+        isOpen={pinModalOpen}
+        onClose={() => setPinModalOpen(false)}
+        onUnlock={handlePinUnlock}
+      />
+
+      {/* Shop Owner Admin Panel Modal (PIN: 2026) */}
       <AdminPanelModal
         isOpen={adminOpen}
         onClose={() => setAdminOpen(false)}
         shop={shop}
         dishes={dishes}
+        spinRewards={spinRewards}
+        orders={allAdminOrders}
+        ordersError={ordersError}
         onSaveShop={handleSaveShop}
         onSaveDishes={handleSaveDishes}
+        onSaveSpinRewards={handleSaveSpinRewards}
+        onUpdateOrderStatus={handleUpdateOrderStatus}
+        adminUser={adminUser}
+        cloudStatus={cloudStatus}
+        onSignInGoogle={handleSignInGoogle}
+        onSignOutGoogle={handleSignOutGoogle}
+        onNotify={notify}
+      />
+
+      {/* Dedicated Developer Control Panel Modal (PIN: 9999) */}
+      <DeveloperControlModal
+        isOpen={devPanelOpen}
+        onClose={() => setDevPanelOpen(false)}
+        developerControl={developerControl}
+        onSaveDeveloperControl={handleSaveDeveloperControl}
+        onPushAllToCloud={handlePushAllToCloud}
+        adminUser={adminUser}
+        cloudStatus={cloudStatus}
+        onSignInGoogle={handleSignInGoogle}
+        onSignOutGoogle={handleSignOutGoogle}
         onNotify={notify}
       />
     </div>

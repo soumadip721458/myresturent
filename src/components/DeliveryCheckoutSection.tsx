@@ -1,25 +1,36 @@
+import { useState } from 'react';
 import {
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
+  Crosshair,
+  Loader2,
   MapPin,
   Phone,
   ReceiptText,
   Truck,
   User,
+  X,
 } from 'lucide-react';
 import type {
   CustomerDetails,
+  CustomerLocation,
   Dish,
   Language,
   OrderPricing,
   ShopConfig,
 } from '../types';
 import {
+  calculateRoadDistanceKm,
+  requestCurrentPosition,
+} from '../utils/geo';
+import {
   formatCurrency,
   formatDigits,
   getDishCopy,
   getShopCopy,
 } from '../utils/i18n';
+import { LocationMapPreview } from './LocationMapPreview';
 
 interface DeliveryCheckoutSectionProps {
   sectionRef: React.RefObject<HTMLElement | null>;
@@ -30,7 +41,11 @@ interface DeliveryCheckoutSectionProps {
   pricing: OrderPricing;
   customer: CustomerDetails;
   errors: Partial<Record<keyof CustomerDetails | 'cart', string>>;
-  onCustomerChange: (field: keyof CustomerDetails, value: string) => void;
+  onCustomerChange: (
+    field: 'name' | 'phone' | 'address',
+    value: string
+  ) => void;
+  onLocationChange: (location: CustomerLocation | null) => void;
   onPlaceOrder: () => void;
 }
 
@@ -44,14 +59,65 @@ export function DeliveryCheckoutSection({
   customer,
   errors,
   onCustomerChange,
+  onLocationChange,
   onPlaceOrder,
 }: DeliveryCheckoutSectionProps) {
+  const [locating, setLocating] = useState(false);
+  const [geoError, setGeoError] = useState<string | null>(null);
+
   const isBn = lang === 'bn';
   const orderedItems = dishes.filter((d) => (cart[d.id] ?? 0) > 0);
-  const { deliveryRadiusText } = getShopCopy(shop, lang);
+  const shopCopy = getShopCopy(shop, lang);
+  const { deliveryRadiusText } = shopCopy;
+  const maxKm =
+    Number.isFinite(shop.maxDeliveryKm) && shop.maxDeliveryKm > 0
+      ? shop.maxDeliveryKm
+      : 5;
+  const shopLat = Number.isFinite(shop.shopLat) ? shop.shopLat : 22.5726;
+  const shopLng = Number.isFinite(shop.shopLng) ? shop.shopLng : 88.3639;
   const hasSpinReward =
     pricing.spinRewardSummary !== 'কোনো অফার প্রযোজ্য নেই' &&
     pricing.spinRewardSummary !== 'No offer applied';
+
+  const applyCoordinates = (lat: number, lng: number) => {
+    const distanceKm = calculateRoadDistanceKm(shopLat, shopLng, lat, lng);
+    onLocationChange({ lat, lng, distanceKm });
+    setGeoError(null);
+  };
+
+  const handleDetectLocation = async () => {
+    setLocating(true);
+    setGeoError(null);
+    try {
+      const fix = await requestCurrentPosition(lang);
+      applyCoordinates(fix.lat, fix.lng);
+    } catch (err) {
+      setGeoError(
+        err instanceof Error
+          ? err.message
+          : isBn
+          ? 'লোকেশন শনাক্ত করা যায়নি।'
+          : 'Could not detect your location.'
+      );
+    } finally {
+      setLocating(false);
+    }
+  };
+
+  const handleDropManualPin = () => {
+    // Starts pin near the restaurant so customer can tap/drag to their exact doorstep even if GPS is unavailable
+    applyCoordinates(
+      Number((shopLat + 0.0045).toFixed(6)),
+      Number((shopLng + 0.0045).toFixed(6))
+    );
+  };
+
+  const location = customer.location ?? null;
+  const liveDistanceKm = location
+    ? calculateRoadDistanceKm(shopLat, shopLng, location.lat, location.lng)
+    : null;
+  const isWithinRadius =
+    liveDistanceKm !== null ? liveDistanceKm <= maxKm : null;
 
   return (
     <section
@@ -163,6 +229,106 @@ export function DeliveryCheckoutSection({
                 <p className="mt-1 text-xs font-medium text-[#d90429] dark:text-[#ff6b81]">
                   {errors.phone}
                 </p>
+              )}
+            </div>
+
+            {/* Live GPS Location Tracker & Interactive Map */}
+            <div className="rounded-2xl bg-[#f4f5f7] dark:bg-[#141520] border border-slate-200 dark:border-white/10 p-3.5 sm:p-4 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs sm:text-sm font-bold text-[#1d1e2c] dark:text-slate-100">
+                  {isBn
+                    ? '📍 ডেলিভারি লোকেশন ট্র্যাক করুন'
+                    : '📍 Track Delivery Location'}
+                </p>
+                {location && (
+                  <button
+                    type="button"
+                    onClick={() => onLocationChange(null)}
+                    className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 hover:text-[#d90429] dark:hover:text-[#ff6b81] inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    <span>{isBn ? 'পিন সরান' : 'Clear Pin'}</span>
+                  </button>
+                )}
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-2">
+                <button
+                  type="button"
+                  disabled={locating}
+                  onClick={handleDetectLocation}
+                  className="flex-1 min-h-[44px] px-3.5 py-2 rounded-xl bg-[#1d1e2c] dark:bg-[#ff9f1c] hover:bg-[#2a2c40] dark:hover:bg-[#f2910d] disabled:opacity-65 text-white dark:text-[#1d1e2c] font-bold text-xs sm:text-sm shadow-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                >
+                  {locating ? (
+                    <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                  ) : (
+                    <Crosshair className="w-4 h-4 shrink-0" />
+                  )}
+                  <span>
+                    {locating
+                      ? isBn
+                        ? 'লোকেশন খোঁজা হচ্ছে...'
+                        : 'Detecting GPS location...'
+                      : isBn
+                      ? '📍 আমার বর্তমান লোকেশন ম্যাপে দেখুন (Detect My Location)'
+                      : '📍 Detect My Location on Map'}
+                  </span>
+                </button>
+
+                {!location && (
+                  <button
+                    type="button"
+                    onClick={handleDropManualPin}
+                    className="min-h-[44px] px-3.5 py-2 rounded-xl bg-white dark:bg-[#1a1b26] hover:bg-slate-50 dark:hover:bg-[#232436] border border-slate-200 dark:border-white/15 text-[#1d1e2c] dark:text-slate-200 font-semibold text-xs sm:text-sm flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0"
+                  >
+                    <MapPin className="w-4 h-4 text-[#d90429] dark:text-[#ff9f1c]" />
+                    <span>{isBn ? 'ম্যাপে পিন বসান' : 'Pin on Map'}</span>
+                  </button>
+                )}
+              </div>
+
+              {geoError && (
+                <div className="rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-700/50 px-3 py-2 text-xs font-medium text-amber-900 dark:text-amber-200 flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <span>{geoError}</span>
+                </div>
+              )}
+
+              {location && liveDistanceKm !== null && (
+                <div className="space-y-2.5">
+                  {/* Distance Status Badge */}
+                  {isWithinRadius ? (
+                    <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-700/60 px-3 py-2.5 text-xs sm:text-sm font-bold text-emerald-800 dark:text-emerald-200 flex items-start gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                      <span>
+                        {isBn
+                          ? `✅ আপনার লোকেশন দোকান থেকে ${formatDigits(liveDistanceKm.toFixed(1), 'bn')} কিমি দূরে — ফ্রি হোম ডেলিভারি উপলব্ধ!`
+                          : `✅ Your location is ${liveDistanceKm.toFixed(1)} km from the shop — FREE Home Delivery available!`}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl bg-amber-50 dark:bg-red-950/50 border border-amber-300 dark:border-red-700/60 px-3 py-2.5 text-xs sm:text-sm font-bold text-red-800 dark:text-amber-200 flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 text-[#d90429] dark:text-[#ff9f1c] shrink-0 mt-0.5" />
+                      <span>
+                        {isBn
+                          ? `⚠️ আপনার লোকেশন দোকান থেকে ${formatDigits(liveDistanceKm.toFixed(1), 'bn')} কিমি দূরে (ডেলিভারি সীমা: ${formatDigits(maxKm, 'bn')} কিমি)। অর্ডার করার আগে দোকানে কল করে কনফার্ম করুন।`
+                          : `⚠️ Your location is ${liveDistanceKm.toFixed(1)} km away (Delivery limit: ${maxKm} km). Please call the shop to confirm before ordering.`}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Interactive Free OpenStreetMap + Leaflet Preview */}
+                  <LocationMapPreview
+                    shopLat={shopLat}
+                    shopLng={shopLng}
+                    shopName={shopCopy.name}
+                    maxDeliveryKm={maxKm}
+                    customerLat={location.lat}
+                    customerLng={location.lng}
+                    lang={lang}
+                    onPinChange={applyCoordinates}
+                  />
+                </div>
               )}
             </div>
 
