@@ -106,9 +106,11 @@ export function getShopCopy(shop: ShopConfig, lang: Language) {
     shop.nameEn?.trim() ||
     (shop.name.trim() === DEFAULT_SHOP_CONFIG.name ? 'Appayon' : shop.name);
 
+  const trimmedAddr = shop.address.trim();
   const address =
-    shop.address.trim() === DEFAULT_SHOP_CONFIG.address
-      ? 'Bazar More, Main Road'
+    trimmedAddr === DEFAULT_SHOP_CONFIG.address ||
+    trimmedAddr === 'বাজার মোড়, মেইন রোড'
+      ? 'Bazar More, Main Road, West Bengal'
       : shop.address;
 
   const rating = toWesternDigits(shop.rating || '4.9');

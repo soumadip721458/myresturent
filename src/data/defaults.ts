@@ -32,11 +32,23 @@ export const LEGACY_DEFAULT_SHOP_NAMES = [
   'Royal Biryani & Fast Food',
 ] as const;
 
+export const LOCAL_SEO_CONFIG = {
+  siteUrl: 'https://appayon.vercel.app',
+  streetAddress: 'Bazar More, Main Road',
+  addressLocality: 'Bazar More',
+  addressRegion: 'West Bengal',
+  postalCode: '700001',
+  addressCountry: 'IN',
+  servesCuisine: 'Bengali, Biryani, Fast Food, Chinese',
+  keywords:
+    'best biryani near me, Appayon restaurant, Appayan restaurant, home delivery biryani, Appayon, Appayan, আপ্যায়ন, আপ্যায়ন রেস্টুরেন্ট, Bazar More biryani, West Bengal biryani, Appayon online order',
+} as const;
+
 export const DEFAULT_SHOP_CONFIG: ShopConfig = {
   name: 'আপ্যায়ন',
   nameEn: 'Appayon',
   subtitle: 'আপ্যায়ন রেস্টুরেন্ট ও ফাস্ট ফুড • Appayon Restaurant & Fast Food',
-  address: 'বাজার মোড়, মেইন রোড',
+  address: 'বাজার মোড়, মেইন রোড, পশ্চিমবঙ্গ',
   rating: '৪.৯',
   statusText: 'এখন গরম খাবার তৈরি হচ্ছে • ৩০ মিনিটে ডেলিভারি',
   whatsappNumber: '918649853354',

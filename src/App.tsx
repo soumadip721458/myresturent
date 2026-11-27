@@ -20,6 +20,7 @@ import { WhatsAppOrderModal } from './components/WhatsAppOrderModal';
 import {
   BASE_HISTORICAL_RATING_SUM,
   BASE_HISTORICAL_REVIEW_COUNT,
+  LOCAL_SEO_CONFIG,
   STORAGE_KEYS,
   isSubscriptionBlocked,
   loadCachedCloudOrders,
@@ -301,6 +302,87 @@ export default function App() {
       totalReviewCount: totalCount,
     };
   }, [reviews]);
+
+  // Keep Restaurant JSON-LD structured data synced with live shop GPS, delivery radius & reviews
+  useEffect(() => {
+    const ldEl = document.getElementById('appayon-restaurant-ldjson');
+    if (!ldEl) return;
+
+    const shopNameEn = shop.nameEn?.trim() || 'Appayon';
+    const shopNameBn = shop.name?.trim() || 'আপ্যায়ন';
+    const displayName =
+      shopNameBn === shopNameEn ? shopNameBn : `${shopNameBn} (${shopNameEn})`;
+    const phoneDigits = normalizePhoneDigits(shop.whatsappNumber);
+    const telephone = phoneDigits
+      ? `+${phoneDigits.length === 10 ? `91${phoneDigits}` : phoneDigits}`
+      : '+91-8649853354';
+    const lat = Number.isFinite(shop.shopLat) ? shop.shopLat : 22.5726;
+    const lng = Number.isFinite(shop.shopLng) ? shop.shopLng : 88.3639;
+    const radiusMeters = Math.max(
+      1000,
+      Math.round((Number.isFinite(shop.maxDeliveryKm) ? shop.maxDeliveryKm : 5) * 1000)
+    );
+    const streetAddress = getShopCopy(shop, 'en').address || LOCAL_SEO_CONFIG.streetAddress;
+
+    const schema = {
+      '@context': 'https://schema.org',
+      '@type': 'Restaurant',
+      name: displayName,
+      alternateName: Array.from(
+        new Set([
+          shopNameEn,
+          'Appayon',
+          'Appayan',
+          `${shopNameEn} Restaurant`,
+          'Appayon Restaurant',
+          'Appayan Restaurant',
+          shopNameBn,
+          'আপ্যায়ন রেস্টুরেন্ট',
+          shop.subtitle?.trim() || 'Appayon Restaurant & Fast Food',
+        ])
+      ),
+      url: LOCAL_SEO_CONFIG.siteUrl,
+      description: `${displayName} at ${streetAddress} — Best biryani near me, authentic Kolkata-style Chicken Biryani, Shahi Mutton Biryani, Chowmein, and Rolls with fast home delivery biryani and WhatsApp online ordering.`,
+      image: shop.heroImage,
+      servesCuisine: LOCAL_SEO_CONFIG.servesCuisine,
+      priceRange: '₹',
+      telephone,
+      openingHours: 'Mo-Su 11:00-23:00',
+      acceptsReservations: false,
+      hasMenu: `${LOCAL_SEO_CONFIG.siteUrl}/#menu-heading`,
+      address: {
+        '@type': 'PostalAddress',
+        streetAddress,
+        addressLocality: LOCAL_SEO_CONFIG.addressLocality,
+        addressRegion: LOCAL_SEO_CONFIG.addressRegion,
+        postalCode: LOCAL_SEO_CONFIG.postalCode,
+        addressCountry: LOCAL_SEO_CONFIG.addressCountry,
+      },
+      geo: {
+        '@type': 'GeoCoordinates',
+        latitude: lat,
+        longitude: lng,
+      },
+      areaServed: {
+        '@type': 'GeoCircle',
+        geoMidpoint: {
+          '@type': 'GeoCoordinates',
+          latitude: lat,
+          longitude: lng,
+        },
+        geoRadius: String(radiusMeters),
+      },
+      aggregateRating: {
+        '@type': 'AggregateRating',
+        ratingValue: averageRating.toFixed(1),
+        reviewCount: String(totalReviewCount),
+        bestRating: '5',
+        worstRating: '1',
+      },
+    };
+
+    ldEl.textContent = JSON.stringify(schema);
+  }, [shop, averageRating, totalReviewCount]);
 
   const handleToggleLanguage = useCallback(() => {
     setLang((prev) => {
