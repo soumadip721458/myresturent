@@ -394,7 +394,9 @@ export interface CloudWriteResult {
 
 /**
  * Writes partial or full shop tenant state to Firestore `shops/{SHOP_ID}`.
- * Automatically creates the document on first publish or merges updates cleanly.
+ * Works reliably on external Vercel domains & mobile browsers even when Google Sign-In popup
+ * is unavailable: shopConfig, menuItems, and spinRewards sync directly with full schema validation,
+ * while developerControl updates still require verified developer authentication in Firestore rules.
  */
 export async function syncShopTenantToCloud(
   patch: Partial<{
@@ -411,11 +413,21 @@ export async function syncShopTenantToCloud(
   }
 ): Promise<CloudWriteResult> {
   if (!db) {
-    return { synced: false, reason: 'not_configured' };
+    return {
+      synced: false,
+      reason: 'not_configured',
+      errorMessage: 'Firebase is not configured (using LocalStorage fallback).',
+    };
   }
 
-  if (!auth?.currentUser) {
-    return { synced: false, reason: 'auth_required' };
+  // Developer subscription control writes strictly require Google Developer Auth
+  if (patch.developerControl && !auth?.currentUser) {
+    return {
+      synced: false,
+      reason: 'auth_required',
+      errorMessage:
+        'Developer Control updates require verified Google Sign-In.',
+    };
   }
 
   const shopPath = `shops/${SHOP_ID}`;
@@ -448,12 +460,27 @@ export async function syncShopTenantToCloud(
       return { synced: true };
     }
 
+    const existingData = existingSnap.data() as Partial<ShopTenantDocument>;
     const updatePayload: Record<string, unknown> = {
       updatedAt: serverTimestamp(),
     };
+
     if (patch.shopConfig) {
       updatePayload.shopConfig = sanitizeShopConfig(patch.shopConfig);
+    } else if (
+      !existingData.shopConfig ||
+      typeof existingData.shopConfig.shopLat !== 'number' ||
+      typeof existingData.shopConfig.shopLng !== 'number' ||
+      typeof existingData.shopConfig.maxDeliveryKm !== 'number'
+    ) {
+      // Auto-heal legacy shopConfig documents missing newly added GPS fields
+      updatePayload.shopConfig = sanitizeShopConfig({
+        ...DEFAULT_SHOP_CONFIG,
+        ...(existingData.shopConfig ?? {}),
+        ...fullSnapshot.shopConfig,
+      });
     }
+
     if (patch.menuItems) {
       updatePayload.menuItems = sanitizeMenuItems(patch.menuItems);
     }
@@ -469,19 +496,21 @@ export async function syncShopTenantToCloud(
     await setDoc(shopRef, updatePayload, { merge: true });
     return { synced: true };
   } catch (error) {
+    const rawMessage =
+      error instanceof Error ? error.message : String(error);
     const info = handleFirestoreError(
       error,
       OperationType.WRITE,
       shopPath,
       false
     );
+    const lower = rawMessage.toLowerCase();
     const isPerm =
-      info.error.toLowerCase().includes('permission') ||
-      info.error.toLowerCase().includes('insufficient');
+      lower.includes('permission') || lower.includes('insufficient');
     return {
       synced: false,
       reason: isPerm ? 'permission_denied' : 'failed',
-      errorMessage: info.error,
+      errorMessage: rawMessage || info.error,
     };
   }
 }

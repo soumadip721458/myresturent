@@ -16,7 +16,11 @@ import {
   DEFAULT_DEVELOPER_CONTROL,
   isSubscriptionBlocked,
 } from '../data/defaults';
-import { SHOP_ID, isFirebaseConfigured } from '../firebase';
+import {
+  SHOP_ID,
+  isFirebaseConfigured,
+  type CloudWriteResult,
+} from '../firebase';
 import type { CloudSyncStatus, DeveloperControlConfig } from '../types';
 import { getTodayKey } from '../utils/bengali';
 
@@ -26,8 +30,8 @@ interface DeveloperControlModalProps {
   developerControl: DeveloperControlConfig;
   onSaveDeveloperControl: (
     nextControl: DeveloperControlConfig
-  ) => Promise<void> | void;
-  onPushAllToCloud: () => Promise<void> | void;
+  ) => Promise<CloudWriteResult | void> | void;
+  onPushAllToCloud: () => Promise<CloudWriteResult | void> | void;
   adminUser: User | null;
   cloudStatus: CloudSyncStatus;
   onSignInGoogle: () => Promise<void>;

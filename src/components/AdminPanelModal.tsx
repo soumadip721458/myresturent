@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { User } from 'firebase/auth';
 import {
+  AlertCircle,
   Check,
+  CheckCircle2,
   ClipboardList,
   Cloud,
   CloudOff,
@@ -28,7 +30,11 @@ import {
   DEFAULT_SHOP_CONFIG,
   SPIN_SLICES,
 } from '../data/defaults';
-import { SHOP_ID, isFirebaseConfigured } from '../firebase';
+import {
+  SHOP_ID,
+  isFirebaseConfigured,
+  type CloudWriteResult,
+} from '../firebase';
 import type {
   CloudOrder,
   CloudSyncStatus,
@@ -59,9 +65,9 @@ interface AdminPanelModalProps {
   spinRewards: SpinSlice[];
   orders: CloudOrder[];
   ordersError: string | null;
-  onSaveShop: (nextShop: ShopConfig) => Promise<void> | void;
-  onSaveDishes: (nextDishes: Dish[]) => Promise<void> | void;
-  onSaveSpinRewards: (nextRewards: SpinSlice[]) => Promise<void> | void;
+  onSaveShop: (nextShop: ShopConfig) => Promise<CloudWriteResult>;
+  onSaveDishes: (nextDishes: Dish[]) => Promise<CloudWriteResult>;
+  onSaveSpinRewards: (nextRewards: SpinSlice[]) => Promise<CloudWriteResult>;
   onUpdateOrderStatus: (
     order: CloudOrder,
     nextStatus: OrderStatus
@@ -119,6 +125,11 @@ export function AdminPanelModal({
 }: AdminPanelModalProps) {
   const [activeTab, setActiveTab] = useState<AdminTab>('orders');
   const [authBusy, setAuthBusy] = useState(false);
+  const [cloudFeedback, setCloudFeedback] = useState<{
+    type: 'saving' | 'success' | 'error';
+    message: string;
+    detail?: string;
+  } | null>(null);
 
   // Section A: Shop Branding & GPS Form
   const [shopDraft, setShopDraft] = useState<ShopConfig>(shop);
@@ -142,11 +153,53 @@ export function AdminPanelModal({
     }
   }, [isOpen, shop, spinRewards]);
 
+  useEffect(() => {
+    if (!isOpen) {
+      setCloudFeedback(null);
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
+
+  const isSavingCloud = cloudFeedback?.type === 'saving';
+
+  const runCloudSave = async (
+    action: () => Promise<CloudWriteResult>
+  ): Promise<CloudWriteResult> => {
+    setCloudFeedback({
+      type: 'saving',
+      message: '☁️ Firestore ক্লাউডে সেভ হচ্ছে...',
+    });
+    try {
+      const res = await action();
+      if (res.synced) {
+        setCloudFeedback({
+          type: 'success',
+          message: '✅ ক্লাউডে সেভ হয়েছে — সব ফোনে আপডেট হয়েছে!',
+        });
+      } else {
+        setCloudFeedback({
+          type: 'error',
+          message: '⚠️ Firestore ক্লাউড সেভ ব্যর্থ হয়েছে (লোকাল স্টোরেজে সেভ আছে)',
+          detail: res.errorMessage || res.reason || 'Unknown Firestore error',
+        });
+      }
+      return res;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setCloudFeedback({
+        type: 'error',
+        message: '⚠️ Firestore ক্লাউড সেভ ব্যর্থ হয়েছে',
+        detail: errMsg,
+      });
+      return { synced: false, reason: 'failed', errorMessage: errMsg };
+    }
+  };
 
   const handleClose = () => {
     setConfirmReset(false);
     setPendingDeleteId(null);
+    setCloudFeedback(null);
     onClose();
   };
 
@@ -241,10 +294,12 @@ export function AdminPanelModal({
       };
       setShopDraft(updatedDraft);
       const cleaned = buildCleanedShop(updatedDraft);
-      await onSaveShop(cleaned);
-      onNotify(
-        `📍 দোকানের GPS লোকেশন সেভ হয়েছে (${fix.lat.toFixed(4)}, ${fix.lng.toFixed(4)})`
-      );
+      const res = await runCloudSave(() => onSaveShop(cleaned));
+      if (res.synced) {
+        onNotify(
+          `✅ ক্লাউডে সেভ হয়েছে — GPS (${fix.lat.toFixed(4)}, ${fix.lng.toFixed(4)})`
+        );
+      }
     } catch (err) {
       onNotify(
         err instanceof Error
@@ -256,24 +311,27 @@ export function AdminPanelModal({
     }
   };
 
-  const handleSaveShopClick = (e: React.FormEvent) => {
+  const handleSaveShopClick = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanedShop = buildCleanedShop(shopDraft);
-    void onSaveShop(cleanedShop);
+    await runCloudSave(() => onSaveShop(cleanedShop));
   };
 
-  const handleResetDefaults = () => {
-    void onSaveShop(DEFAULT_SHOP_CONFIG);
-    void onSaveDishes(DEFAULT_MENU);
-    void onSaveSpinRewards(SPIN_SLICES);
+  const handleResetDefaults = async () => {
     setShopDraft(DEFAULT_SHOP_CONFIG);
     setRewardsDraft(SPIN_SLICES);
     setDishForm(EMPTY_DISH_FORM);
     setConfirmReset(false);
-    onNotify('সব তথ্য ও মেনু ডিফল্ট অবস্থায় ফিরিয়ে আনা হয়েছে');
+    await runCloudSave(async () => {
+      const shopRes = await onSaveShop(DEFAULT_SHOP_CONFIG);
+      if (!shopRes.synced) return shopRes;
+      const menuRes = await onSaveDishes(DEFAULT_MENU);
+      if (!menuRes.synced) return menuRes;
+      return onSaveSpinRewards(SPIN_SLICES);
+    });
   };
 
-  const handleSaveSpinRewardsClick = (e: React.FormEvent) => {
+  const handleSaveSpinRewardsClick = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleaned = rewardsDraft.map((s) => ({
       ...s,
@@ -282,7 +340,7 @@ export function AdminPanelModal({
       conditionText: s.conditionText.trim(),
       weight: Math.max(0, Math.min(100, Math.round(Number(s.weight) || 0))),
     }));
-    void onSaveSpinRewards(cleaned);
+    await runCloudSave(() => onSaveSpinRewards(cleaned));
   };
 
   const handleDishImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -316,24 +374,26 @@ export function AdminPanelModal({
     setDishFormError('');
   };
 
-  const handleToggleDishStock = (dish: Dish) => {
+  const handleToggleDishStock = async (dish: Dish) => {
     const currentlyInStock = dish.inStock !== false;
     const nextInStock = !currentlyInStock;
     const nextDishes = dishes.map((d) =>
       d.id === dish.id ? { ...d, inStock: nextInStock } : d
     );
-    void onSaveDishes(nextDishes);
     if (dishForm.id === dish.id) {
       setDishForm((prev) => ({ ...prev, inStock: nextInStock }));
     }
-    onNotify(
-      nextInStock
-        ? `✅ "${dish.name}" এখন উপলব্ধ (In Stock) করা হয়েছে`
-        : `🚫 "${dish.name}" শেষ হয়ে গেছে (Sold Out) হিসেবে চিহ্নিত হয়েছে`
-    );
+    const res = await runCloudSave(() => onSaveDishes(nextDishes));
+    if (res.synced) {
+      onNotify(
+        nextInStock
+          ? `✅ "${dish.name}" উপলব্ধ (In Stock) — ক্লাউডে সেভ হয়েছে!`
+          : `🚫 "${dish.name}" শেষ (Sold Out) — ক্লাউডে সেভ হয়েছে!`
+      );
+    }
   };
 
-  const handleSaveDish = (e: React.FormEvent) => {
+  const handleSaveDish = async (e: React.FormEvent) => {
     e.preventDefault();
     const name = dishForm.name.trim();
     const price = Number(dishForm.price);
@@ -374,28 +434,24 @@ export function AdminPanelModal({
       inStock: dishForm.inStock,
     };
 
-    if (dishForm.id) {
-      onSaveDishes(dishes.map((d) => (d.id === dishForm.id ? nextDish : d)));
-      onNotify(`"${nextDish.name}" আপডেট করা হয়েছে!`);
-    } else {
-      onSaveDishes([nextDish, ...dishes]);
-      onNotify(`নতুন পদ "${nextDish.name}" মেনুতে যোগ হয়েছে!`);
-    }
+    const nextList = dishForm.id
+      ? dishes.map((d) => (d.id === dishForm.id ? nextDish : d))
+      : [nextDish, ...dishes];
 
     setDishForm(EMPTY_DISH_FORM);
     setDishFormError('');
+
+    await runCloudSave(() => onSaveDishes(nextList));
   };
 
-  const handleDeleteDish = (dishId: string) => {
-    const target = dishes.find((d) => d.id === dishId);
-    onSaveDishes(dishes.filter((d) => d.id !== dishId));
+  const handleDeleteDish = async (dishId: string) => {
     setPendingDeleteId(null);
     if (dishForm.id === dishId) {
       setDishForm(EMPTY_DISH_FORM);
     }
-    if (target) {
-      onNotify(`"${target.name}" মেনু থেকে মুছে ফেলা হয়েছে`);
-    }
+    await runCloudSave(() =>
+      onSaveDishes(dishes.filter((d) => d.id !== dishId))
+    );
   };
 
   return (
@@ -417,9 +473,9 @@ export function AdminPanelModal({
                 মালিক / অ্যাডমিন ড্যাশবোর্ড
               </h2>
               <p className="text-xs text-white/75 truncate">
-                {isFirebaseConfigured && adminUser
-                  ? `☁️ লাইভ ক্লাউড সিঙ্ক চালু (shops/${SHOP_ID})`
-                  : 'স্থানীয় সেভ চালু • সব ফোনে লাইভ আপডেটের জন্য Google লগইন করুন'}
+                {isFirebaseConfigured
+                  ? `☁️ লাইভ ক্লাউড সিঙ্ক চালু (shops/${SHOP_ID}) • সব ডিভাইসে রিয়েল-টাইম আপডেট`
+                  : 'স্থানীয় সেভ চালু (LocalStorage Fallback)'}
               </p>
             </div>
           </div>
@@ -445,8 +501,8 @@ export function AdminPanelModal({
             <span className="truncate text-white/90">
               {isFirebaseConfigured
                 ? adminUser
-                  ? `Firestore Sync: ${adminUser.email}`
-                  : `Tenant: shops/${SHOP_ID} (ক্লাউড আপডেটের জন্য লগইন করুন)`
+                  ? `Firestore Cloud Sync চালু • ${adminUser.email}`
+                  : `☁️ Direct Cloud Sync চালু (shops/${SHOP_ID}) • অর্ডার লগের জন্য ঐচ্ছিক Google লগইন`
                 : 'LocalStorage Fallback Mode'}
             </span>
           </div>
@@ -469,7 +525,7 @@ export function AdminPanelModal({
                 className="px-3 py-1 rounded-lg bg-[#ff9f1c] hover:bg-[#f2910d] text-[#1d1e2c] font-bold inline-flex items-center gap-1 cursor-pointer"
               >
                 <LogIn className="w-3.5 h-3.5" />
-                <span>{authBusy ? 'লগইন...' : 'Google লগইন (Cloud Sync)'}</span>
+                <span>{authBusy ? 'লগইন...' : 'Google লগইন (ঐচ্ছিক)'}</span>
               </button>
             ))}
         </div>
@@ -559,6 +615,49 @@ export function AdminPanelModal({
             <span>📲 Table QR</span>
           </button>
         </div>
+
+        {/* Explicit Firestore Cloud Save Status Banner */}
+        {cloudFeedback && (
+          <div
+            role={cloudFeedback.type === 'error' ? 'alert' : 'status'}
+            aria-live="polite"
+            className={`px-4 py-2.5 border-b text-xs sm:text-sm font-bold flex items-start justify-between gap-2 shrink-0 ${
+              cloudFeedback.type === 'success'
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                : cloudFeedback.type === 'error'
+                ? 'bg-red-50 border-red-200 text-[#b30322]'
+                : 'bg-amber-50 border-amber-200 text-amber-900'
+            }`}
+          >
+            <div className="flex items-start gap-2 min-w-0">
+              {cloudFeedback.type === 'saving' ? (
+                <Loader2 className="w-4 h-4 animate-spin shrink-0 mt-0.5 text-amber-700" />
+              ) : cloudFeedback.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600" />
+              ) : (
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-[#d90429]" />
+              )}
+              <div className="min-w-0">
+                <p className="leading-snug">{cloudFeedback.message}</p>
+                {cloudFeedback.detail && (
+                  <p className="mt-1 font-mono text-[11px] font-medium text-red-800/90 break-all">
+                    Error: {cloudFeedback.detail}
+                  </p>
+                )}
+              </div>
+            </div>
+            {cloudFeedback.type !== 'saving' && (
+              <button
+                type="button"
+                onClick={() => setCloudFeedback(null)}
+                aria-label="বিজ্ঞপ্তি বন্ধ করুন"
+                className="p-1 rounded-lg hover:bg-black/5 shrink-0 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Scrollable Body — light-surface inner workspace ensures crisp print preview & form legibility */}
         <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-6 bg-white text-[#1d1e2c]">
@@ -667,10 +766,19 @@ export function AdminPanelModal({
 
               <button
                 type="submit"
-                className="w-full min-h-[46px] rounded-xl bg-[#d90429] hover:bg-[#b30322] text-white font-bold text-sm flex items-center justify-center gap-2 shadow-md transition-colors cursor-pointer"
+                disabled={isSavingCloud}
+                className="w-full min-h-[46px] rounded-xl bg-[#d90429] hover:bg-[#b30322] disabled:opacity-60 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-md transition-colors cursor-pointer"
               >
-                <Check className="w-4 h-4" />
-                <span>স্পিন পুরস্কার সেভ করুন</span>
+                {isSavingCloud ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Check className="w-4 h-4" />
+                )}
+                <span>
+                  {isSavingCloud
+                    ? 'ক্লাউডে সেভ হচ্ছে...'
+                    : 'স্পিন পুরস্কার সেভ করুন'}
+                </span>
               </button>
             </form>
           ) : activeTab === 'shop' ? (
@@ -1103,10 +1211,19 @@ export function AdminPanelModal({
                   <div className="pt-2 flex flex-wrap items-center justify-between gap-3">
                     <button
                       type="submit"
-                      className="min-h-[46px] px-6 py-2.5 rounded-xl bg-[#d90429] hover:bg-[#b30322] text-white font-bold text-sm flex items-center gap-2 shadow-md transition-colors cursor-pointer"
+                      disabled={isSavingCloud}
+                      className="min-h-[46px] px-6 py-2.5 rounded-xl bg-[#d90429] hover:bg-[#b30322] disabled:opacity-60 text-white font-bold text-sm flex items-center gap-2 shadow-md transition-colors cursor-pointer"
                     >
-                      <Check className="w-4 h-4" />
-                      <span>দোকানের তথ্য সেভ করুন</span>
+                      {isSavingCloud ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Check className="w-4 h-4" />
+                      )}
+                      <span>
+                        {isSavingCloud
+                          ? 'ক্লাউডে সেভ হচ্ছে...'
+                          : 'দোকানের তথ্য সেভ করুন'}
+                      </span>
                     </button>
 
                     {!confirmReset ? (
@@ -1336,9 +1453,15 @@ export function AdminPanelModal({
 
                     <button
                       type="submit"
-                      className="w-full min-h-[44px] rounded-xl bg-[#d90429] hover:bg-[#b30322] text-white font-bold text-sm flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+                      disabled={isSavingCloud}
+                      className="w-full min-h-[44px] rounded-xl bg-[#d90429] hover:bg-[#b30322] disabled:opacity-60 text-white font-bold text-sm flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer"
                     >
-                      {dishForm.id ? (
+                      {isSavingCloud ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span>ক্লাউডে সেভ হচ্ছে...</span>
+                        </>
+                      ) : dishForm.id ? (
                         <>
                           <Check className="w-4 h-4" />
                           <span>পরিবর্তন সেভ করুন</span>

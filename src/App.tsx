@@ -518,28 +518,21 @@ export default function App() {
   );
 
   const reportCloudResult = useCallback(
-    (result: CloudWriteResult, successMessage: string) => {
+    (result: CloudWriteResult) => {
       if (result.synced) {
-        notify(`☁️ ${successMessage} (সব গ্রাহকের ফোনে লাইভ আপডেট হয়েছে!)`);
-      } else if (result.reason === 'auth_required') {
-        notify(
-          `${successMessage} (স্থানীয়ভাবে সেভ হয়েছে — ক্লাউড সিঙ্কের জন্য Google লগইন করুন)`
-        );
-      } else if (result.reason === 'permission_denied') {
-        notify(
-          'স্থানীয়ভাবে সেভ হয়েছে — Firestore ক্লাউড রাইটের অনুমতি নেই (অনুমোদিত Google অ্যাকাউন্ট দিয়ে লগইন করুন)'
-        );
+        notify('✅ ক্লাউডে সেভ হয়েছে — সব ফোনে আপডেট হয়েছে!');
       } else if (result.reason === 'not_configured') {
-        notify(successMessage);
+        notify('স্থানীয়ভাবে সেভ হয়েছে (Firebase কনফিগার করা নেই)');
       } else {
-        notify(`${successMessage} (ক্লাউড সিঙ্ক ব্যর্থ হয়েছে — আবার চেষ্টা করুন)`);
+        const detail = result.errorMessage || result.reason || 'Unknown error';
+        notify(`⚠️ ক্লাউড সেভ ব্যর্থ: ${detail}`);
       }
     },
     [notify]
   );
 
   const handleSaveShop = useCallback(
-    async (nextShop: ShopConfig) => {
+    async (nextShop: ShopConfig): Promise<CloudWriteResult> => {
       setShop(nextShop);
       try {
         localStorage.setItem(STORAGE_KEYS.SHOP, JSON.stringify(nextShop));
@@ -555,13 +548,14 @@ export default function App() {
           developerControl,
         }
       );
-      reportCloudResult(res, 'দোকানের তথ্য সেভ হয়েছে');
+      reportCloudResult(res);
+      return res;
     },
     [developerControl, dishes, notify, reportCloudResult, spinRewards]
   );
 
   const handleSaveDishes = useCallback(
-    async (nextDishes: Dish[]) => {
+    async (nextDishes: Dish[]): Promise<CloudWriteResult> => {
       setDishes(nextDishes);
       try {
         localStorage.setItem(STORAGE_KEYS.MENU, JSON.stringify(nextDishes));
@@ -577,17 +571,14 @@ export default function App() {
           developerControl,
         }
       );
-      if (res.synced) {
-        notify('☁️ মেনু আপডেট সব গ্রাহকের ফোনে লাইভ সিঙ্ক হয়েছে!');
-      } else if (res.reason === 'permission_denied') {
-        notify('মেনু স্থানীয়ভাবে সেভ হয়েছে (ক্লাউড রাইটের অনুমতি নেই)');
-      }
+      reportCloudResult(res);
+      return res;
     },
-    [developerControl, notify, shop, spinRewards]
+    [developerControl, notify, reportCloudResult, shop, spinRewards]
   );
 
   const handleSaveSpinRewards = useCallback(
-    async (nextRewards: SpinSlice[]) => {
+    async (nextRewards: SpinSlice[]): Promise<CloudWriteResult> => {
       setSpinRewards(nextRewards);
       try {
         localStorage.setItem(
@@ -606,13 +597,14 @@ export default function App() {
           developerControl,
         }
       );
-      reportCloudResult(res, 'স্পিন পুরস্কার সেভ হয়েছে');
+      reportCloudResult(res);
+      return res;
     },
     [developerControl, dishes, reportCloudResult, shop]
   );
 
   const handleSaveDeveloperControl = useCallback(
-    async (nextControl: DeveloperControlConfig) => {
+    async (nextControl: DeveloperControlConfig): Promise<CloudWriteResult> => {
       setDeveloperControl(nextControl);
       try {
         localStorage.setItem(
@@ -631,12 +623,13 @@ export default function App() {
           developerControl: nextControl,
         }
       );
-      reportCloudResult(res, 'ডেভেলপার কন্ট্রোল সেভ হয়েছে');
+      reportCloudResult(res);
+      return res;
     },
     [dishes, reportCloudResult, shop, spinRewards]
   );
 
-  const handlePushAllToCloud = useCallback(async () => {
+  const handlePushAllToCloud = useCallback(async (): Promise<CloudWriteResult> => {
     const res = await syncShopTenantToCloud(
       {
         shopConfig: shop,
@@ -651,7 +644,8 @@ export default function App() {
         developerControl,
       }
     );
-    reportCloudResult(res, 'সব ডেটা Firestore-এ পাবলিশ হয়েছে');
+    reportCloudResult(res);
+    return res;
   }, [developerControl, dishes, reportCloudResult, shop, spinRewards]);
 
   const handleSignInGoogle = useCallback(async () => {
@@ -660,8 +654,11 @@ export default function App() {
       if (user) {
         notify(`✅ Google লগইন সফল (${user.email})`);
       }
-    } catch {
-      notify('Google লগইন বাতিল বা ব্যর্থ হয়েছে — আবার চেষ্টা করুন');
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      notify(
+        `Google লগইন ব্লক/ব্যর্থ (${detail}) — তবে মেনু ও দোকানের সেভ ক্লাউডে কাজ করবে`
+      );
     }
   }, [notify]);
 
