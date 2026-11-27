@@ -26,11 +26,26 @@ export const STORAGE_KEYS = {
 export const BASE_HISTORICAL_REVIEW_COUNT = 124;
 export const BASE_HISTORICAL_RATING_SUM = 607.6; // 124 * 4.9 => starts at 4.9 across 128 reviews with 4 seed cards
 
-export const LEGACY_DEFAULT_SHOP_NAMES = [
-  'রয়েল বিরিয়ানি ও ফাস্ট ফুড',
-  'রয়েল বিরিয়ানি ও ফাস্ট ফুড',
-  'Royal Biryani & Fast Food',
-] as const;
+/**
+ * Strictly fills ONLY fields that are `undefined` in `source` using `defaults`.
+ * Never overwrites any existing saved value (including custom names, empty strings,
+ * false booleans, or 0) with defaults.
+ */
+export function mergeUndefinedDefaults<T extends object>(
+  defaults: T,
+  source?: Partial<T> | null
+): T {
+  if (!source || typeof source !== 'object') {
+    return { ...defaults };
+  }
+  const merged = { ...defaults } as Record<string, unknown>;
+  for (const [key, value] of Object.entries(source as Record<string, unknown>)) {
+    if (value !== undefined) {
+      merged[key] = value;
+    }
+  }
+  return merged as T;
+}
 
 export const LOCAL_SEO_CONFIG = {
   siteUrl: 'https://appayon.vercel.app',
@@ -231,33 +246,12 @@ export const LIVE_WINNERS_TICKER: string[] = [
   '🎉 কৌশিক পাল জিতলেন ১০% ছাড়!',
 ];
 
-export function normalizeShopBranding(raw: Partial<ShopConfig>): ShopConfig {
-  const merged: ShopConfig = {
-    ...DEFAULT_SHOP_CONFIG,
-    ...raw,
-  };
-  const trimmedName = (merged.name || '').trim();
-  const isLegacyName = (LEGACY_DEFAULT_SHOP_NAMES as readonly string[]).includes(
-    trimmedName
-  );
-  if (!trimmedName || isLegacyName) {
-    merged.name = DEFAULT_SHOP_CONFIG.name;
-    if (!raw.nameEn || (LEGACY_DEFAULT_SHOP_NAMES as readonly string[]).includes(raw.nameEn.trim())) {
-      merged.nameEn = DEFAULT_SHOP_CONFIG.nameEn;
-    }
-  }
-  if (!merged.subtitle || !merged.subtitle.trim()) {
-    merged.subtitle = DEFAULT_SHOP_CONFIG.subtitle;
-  }
-  return merged;
-}
-
 export function loadShopConfig(): ShopConfig {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.SHOP);
     if (!raw) return DEFAULT_SHOP_CONFIG;
     const parsed = JSON.parse(raw) as Partial<ShopConfig>;
-    return normalizeShopBranding(parsed);
+    return mergeUndefinedDefaults(DEFAULT_SHOP_CONFIG, parsed);
   } catch {
     return DEFAULT_SHOP_CONFIG;
   }
@@ -268,10 +262,10 @@ export function loadMenuDishes(): Dish[] {
     const raw = localStorage.getItem(STORAGE_KEYS.MENU);
     if (!raw) return DEFAULT_MENU;
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) {
+    if (Array.isArray(parsed)) {
       return (parsed as Dish[]).map((d) => ({
         ...d,
-        inStock: d.inStock !== false,
+        inStock: d.inStock === undefined ? true : Boolean(d.inStock),
       }));
     }
     return DEFAULT_MENU;
@@ -398,10 +392,7 @@ export function loadDeveloperControl(): DeveloperControlConfig {
     const raw = localStorage.getItem(STORAGE_KEYS.DEVELOPER_CONTROL);
     if (!raw) return DEFAULT_DEVELOPER_CONTROL;
     const parsed = JSON.parse(raw) as Partial<DeveloperControlConfig>;
-    return {
-      ...DEFAULT_DEVELOPER_CONTROL,
-      ...parsed,
-    };
+    return mergeUndefinedDefaults(DEFAULT_DEVELOPER_CONTROL, parsed);
   } catch {
     return DEFAULT_DEVELOPER_CONTROL;
   }

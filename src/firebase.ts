@@ -31,7 +31,7 @@ import {
   DEFAULT_MENU,
   DEFAULT_SHOP_CONFIG,
   SPIN_SLICES,
-  normalizeShopBranding,
+  mergeUndefinedDefaults,
 } from './data/defaults';
 import type {
   CloudOrder,
@@ -235,12 +235,14 @@ function sanitizeShopConfig(input: ShopConfig): ShopConfig {
 
   return {
     name: (input.name || DEFAULT_SHOP_CONFIG.name).trim().slice(0, 120),
-    nameEn: (input.nameEn || DEFAULT_SHOP_CONFIG.nameEn || 'Appayon')
-      .trim()
-      .slice(0, 120),
-    subtitle: (input.subtitle || DEFAULT_SHOP_CONFIG.subtitle || '')
-      .trim()
-      .slice(0, 180),
+    nameEn:
+      input.nameEn !== undefined
+        ? String(input.nameEn).trim().slice(0, 120)
+        : (DEFAULT_SHOP_CONFIG.nameEn || 'Appayon').slice(0, 120),
+    subtitle:
+      input.subtitle !== undefined
+        ? String(input.subtitle).trim().slice(0, 180)
+        : (DEFAULT_SHOP_CONFIG.subtitle || '').slice(0, 180),
     address: (input.address || DEFAULT_SHOP_CONFIG.address).trim().slice(0, 240),
     rating: (input.rating || DEFAULT_SHOP_CONFIG.rating).trim().slice(0, 20),
     statusText: (input.statusText || DEFAULT_SHOP_CONFIG.statusText)
@@ -339,9 +341,13 @@ function sanitizeSpinRewards(rewards: SpinSlice[]): SpinSlice[] {
 
 // ===============================================================
 // Real-time Multi-Shop Firestore Listener (`shops/{SHOP_ID}`)
+// Cloud-First Single Source of Truth:
+// - Reads strictly from Firestore via `onSnapshot` and mirrors into app state/localStorage.
+// - Never overwrites Firestore with defaults or localStorage on startup.
+// - Falls back to `defaults.ts` ONLY when a field is `undefined` or `!snapshot.exists()`.
 // ===============================================================
 export function subscribeToShopTenant(
-  onUpdate: (data: Partial<ShopTenantDocument>) => void,
+  onUpdate: (data: Partial<ShopTenantDocument>, existsInCloud: boolean) => void,
   onStatusChange?: (status: CloudSyncStatus) => void
 ): Unsubscribe {
   if (!db) {
@@ -357,31 +363,41 @@ export function subscribeToShopTenant(
     shopRef,
     (snapshot) => {
       onStatusChange?.('synced');
-      if (!snapshot.exists()) return;
+      if (!snapshot.exists()) {
+        onUpdate({}, false);
+        return;
+      }
 
       const raw = snapshot.data() as Partial<ShopTenantDocument>;
       const parsed: Partial<ShopTenantDocument> = {};
 
       if (raw.shopConfig && typeof raw.shopConfig === 'object') {
-        parsed.shopConfig = normalizeShopBranding(raw.shopConfig);
+        parsed.shopConfig = mergeUndefinedDefaults(
+          DEFAULT_SHOP_CONFIG,
+          raw.shopConfig
+        );
       }
-      if (Array.isArray(raw.menuItems) && raw.menuItems.length > 0) {
+      if (raw.menuItems !== undefined && Array.isArray(raw.menuItems)) {
         parsed.menuItems = (raw.menuItems as Dish[]).map((d) => ({
           ...d,
-          inStock: d.inStock !== false,
+          inStock: d.inStock === undefined ? true : Boolean(d.inStock),
         }));
       }
-      if (Array.isArray(raw.spinRewards) && raw.spinRewards.length > 0) {
+      if (
+        raw.spinRewards !== undefined &&
+        Array.isArray(raw.spinRewards) &&
+        raw.spinRewards.length > 0
+      ) {
         parsed.spinRewards = raw.spinRewards as SpinSlice[];
       }
       if (raw.developerControl && typeof raw.developerControl === 'object') {
-        parsed.developerControl = {
-          ...DEFAULT_DEVELOPER_CONTROL,
-          ...raw.developerControl,
-        };
+        parsed.developerControl = mergeUndefinedDefaults(
+          DEFAULT_DEVELOPER_CONTROL,
+          raw.developerControl
+        );
       }
 
-      onUpdate(parsed);
+      onUpdate(parsed, true);
     },
     (error) => {
       onStatusChange?.('error');
@@ -397,10 +413,13 @@ export interface CloudWriteResult {
 }
 
 /**
- * Writes partial or full shop tenant state to Firestore `shops/{SHOP_ID}`.
- * Works reliably on external Vercel domains & mobile browsers even when Google Sign-In popup
- * is unavailable: shopConfig, menuItems, spinRewards, and developerControl sync directly via
- * `setDoc(..., { merge: true })` with full schema validation enforced in `firestore.rules`.
+ * Writes ONLY the explicitly edited fields (`patch`) to Firestore `shops/{SHOP_ID}`.
+ * - Checks the live server document first (`getDocFromServer`) so a cache miss can never
+ *   falsely treat an existing shop as missing and overwrite it with `defaults.ts`.
+ * - When the document already exists, untouched sibling fields in Firestore are NEVER
+ *   overwritten by `localStorage` or `defaults.ts`.
+ * - `defaults.ts` is ONLY used when `!existingSnap.exists()` or when a required schema
+ *   sub-field inside an existing document is strictly `undefined`.
  */
 export async function syncShopTenantToCloud(
   patch: Partial<{
@@ -409,7 +428,7 @@ export async function syncShopTenantToCloud(
     spinRewards: SpinSlice[];
     developerControl: DeveloperControlConfig;
   }>,
-  fullSnapshot: {
+  initialFallbackSnapshot?: {
     shopConfig: ShopConfig;
     menuItems: Dish[];
     spinRewards: SpinSlice[];
@@ -428,23 +447,43 @@ export async function syncShopTenantToCloud(
   const shopRef = doc(db, 'shops', SHOP_ID);
 
   try {
-    const existingSnap = await getDoc(shopRef);
+    let existingSnap;
+    let serverCheckFailed = false;
+    try {
+      existingSnap = await getDocFromServer(shopRef);
+    } catch {
+      serverCheckFailed = true;
+      // Fallback to cached snapshot only if server read is temporarily unreachable
+      existingSnap = await getDoc(shopRef);
+    }
 
     if (!existingSnap.exists()) {
+      if (serverCheckFailed) {
+        return {
+          synced: false,
+          reason: 'failed',
+          errorMessage:
+            'Unable to verify existing Firestore data while offline. Reconnect and try saving again.',
+        };
+      }
       const createPayload = {
         shopId: SHOP_ID,
         shopConfig: sanitizeShopConfig(
-          patch.shopConfig ?? fullSnapshot.shopConfig ?? DEFAULT_SHOP_CONFIG
+          patch.shopConfig ??
+            initialFallbackSnapshot?.shopConfig ??
+            DEFAULT_SHOP_CONFIG
         ),
         menuItems: sanitizeMenuItems(
-          patch.menuItems ?? fullSnapshot.menuItems ?? DEFAULT_MENU
+          patch.menuItems ?? initialFallbackSnapshot?.menuItems ?? DEFAULT_MENU
         ),
         spinRewards: sanitizeSpinRewards(
-          patch.spinRewards ?? fullSnapshot.spinRewards ?? SPIN_SLICES
+          patch.spinRewards ??
+            initialFallbackSnapshot?.spinRewards ??
+            SPIN_SLICES
         ),
         developerControl: sanitizeDeveloperControl(
           patch.developerControl ??
-            fullSnapshot.developerControl ??
+            initialFallbackSnapshot?.developerControl ??
             DEFAULT_DEVELOPER_CONTROL
         ),
         createdAt: serverTimestamp(),
@@ -459,42 +498,48 @@ export async function syncShopTenantToCloud(
       updatedAt: serverTimestamp(),
     };
 
-    if (patch.shopConfig) {
+    if (patch.shopConfig !== undefined) {
       updatePayload.shopConfig = sanitizeShopConfig(patch.shopConfig);
     } else if (
-      !existingData.shopConfig ||
-      typeof existingData.shopConfig.shopLat !== 'number' ||
-      typeof existingData.shopConfig.shopLng !== 'number' ||
-      typeof existingData.shopConfig.maxDeliveryKm !== 'number'
+      existingData.shopConfig === undefined ||
+      existingData.shopConfig.shopLat === undefined ||
+      existingData.shopConfig.shopLng === undefined ||
+      existingData.shopConfig.maxDeliveryKm === undefined
     ) {
-      // Auto-heal legacy shopConfig documents missing newly added GPS fields
-      updatePayload.shopConfig = sanitizeShopConfig({
-        ...DEFAULT_SHOP_CONFIG,
-        ...(existingData.shopConfig ?? {}),
-        ...fullSnapshot.shopConfig,
-      });
+      // Preserve every existing cloud shopConfig field verbatim; ONLY fill strictly undefined schema keys
+      updatePayload.shopConfig = sanitizeShopConfig(
+        mergeUndefinedDefaults(DEFAULT_SHOP_CONFIG, existingData.shopConfig)
+      );
     }
 
-    if (patch.menuItems) {
+    if (patch.menuItems !== undefined) {
       updatePayload.menuItems = sanitizeMenuItems(patch.menuItems);
+    } else if (existingData.menuItems === undefined) {
+      updatePayload.menuItems = sanitizeMenuItems(DEFAULT_MENU);
     }
-    if (patch.spinRewards) {
+
+    if (patch.spinRewards !== undefined) {
       updatePayload.spinRewards = sanitizeSpinRewards(patch.spinRewards);
+    } else if (existingData.spinRewards === undefined) {
+      updatePayload.spinRewards = sanitizeSpinRewards(SPIN_SLICES);
     }
-    if (patch.developerControl) {
+
+    if (patch.developerControl !== undefined) {
       updatePayload.developerControl = sanitizeDeveloperControl(
         patch.developerControl
       );
     } else if (
-      !existingData.developerControl ||
-      typeof existingData.developerControl.serviceActive !== 'boolean' ||
-      typeof existingData.developerControl.subscriptionExpiry !== 'string'
+      existingData.developerControl === undefined ||
+      existingData.developerControl.serviceActive === undefined ||
+      existingData.developerControl.subscriptionExpiry === undefined
     ) {
-      updatePayload.developerControl = sanitizeDeveloperControl({
-        ...DEFAULT_DEVELOPER_CONTROL,
-        ...(existingData.developerControl ?? {}),
-        ...fullSnapshot.developerControl,
-      });
+      // Preserve every existing cloud developerControl field verbatim; ONLY fill strictly undefined schema keys
+      updatePayload.developerControl = sanitizeDeveloperControl(
+        mergeUndefinedDefaults(
+          DEFAULT_DEVELOPER_CONTROL,
+          existingData.developerControl
+        )
+      );
     }
 
     await setDoc(shopRef, updatePayload, { merge: true });

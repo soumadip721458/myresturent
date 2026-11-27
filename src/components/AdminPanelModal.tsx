@@ -258,9 +258,14 @@ export function AdminPanelModal({
 
     return {
       name: draft.name.trim() || DEFAULT_SHOP_CONFIG.name,
-      nameEn: draft.nameEn?.trim() || DEFAULT_SHOP_CONFIG.nameEn || 'Appayon',
+      nameEn:
+        draft.nameEn !== undefined
+          ? draft.nameEn.trim()
+          : DEFAULT_SHOP_CONFIG.nameEn || 'Appayon',
       subtitle:
-        draft.subtitle?.trim() || DEFAULT_SHOP_CONFIG.subtitle || '',
+        draft.subtitle !== undefined
+          ? draft.subtitle.trim()
+          : DEFAULT_SHOP_CONFIG.subtitle || '',
       address: draft.address.trim() || DEFAULT_SHOP_CONFIG.address,
       rating: draft.rating.trim() || DEFAULT_SHOP_CONFIG.rating,
       statusText: draft.statusText.trim() || DEFAULT_SHOP_CONFIG.statusText,

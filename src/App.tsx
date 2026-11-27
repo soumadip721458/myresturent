@@ -168,10 +168,16 @@ export default function App() {
 
   const isBn = lang === 'bn';
 
-  // Real-time Firestore sync (`shops/{SHOP_ID}`) with graceful localStorage fallback
+  // Cloud-First Single Source of Truth (`shops/{SHOP_ID}`):
+  // Always load from Firestore via `onSnapshot` and mirror into `localStorage`.
+  // Never overwrite Firestore with `localStorage` or `defaults.ts` on startup.
+  const cloudHydratedRef = useRef(false);
   useEffect(() => {
-    const unsubscribe = subscribeToShopTenant((remote) => {
-      if (remote.shopConfig) {
+    const unsubscribe = subscribeToShopTenant((remote, existsInCloud) => {
+      cloudHydratedRef.current = true;
+      if (!existsInCloud) return;
+
+      if (remote.shopConfig !== undefined) {
         setShop(remote.shopConfig);
         try {
           localStorage.setItem(
@@ -182,7 +188,7 @@ export default function App() {
           // Ignore storage quota errors
         }
       }
-      if (remote.menuItems) {
+      if (remote.menuItems !== undefined) {
         setDishes(remote.menuItems);
         try {
           localStorage.setItem(
@@ -193,7 +199,7 @@ export default function App() {
           // Ignore storage quota errors
         }
       }
-      if (remote.spinRewards) {
+      if (remote.spinRewards !== undefined) {
         setSpinRewards(remote.spinRewards);
         try {
           localStorage.setItem(
@@ -204,7 +210,7 @@ export default function App() {
           // Ignore storage quota errors
         }
       }
-      if (remote.developerControl) {
+      if (remote.developerControl !== undefined) {
         setDeveloperControl(remote.developerControl);
         try {
           localStorage.setItem(
@@ -718,6 +724,17 @@ export default function App() {
   );
 
   const handlePushAllToCloud = useCallback(async (): Promise<CloudWriteResult> => {
+    if (cloudStatus === 'connecting' && !cloudHydratedRef.current) {
+      const blocked: CloudWriteResult = {
+        synced: false,
+        reason: 'failed',
+        errorMessage:
+          'ক্লাউড ডেটা এখনো লোড হচ্ছে — পুরোনো ডেটা সুরক্ষিত রাখতে কয়েক সেকেন্ড পর আবার চেষ্টা করুন।',
+      };
+      reportCloudResult(blocked);
+      return blocked;
+    }
+
     const res = await syncShopTenantToCloud(
       {
         shopConfig: shop,
@@ -737,7 +754,7 @@ export default function App() {
       '✅ ডেভেলপার সেটিংস ক্লাউডে সেভ হয়েছে — সব ফোনে আপডেট হয়েছে!'
     );
     return res;
-  }, [developerControl, dishes, reportCloudResult, shop, spinRewards]);
+  }, [cloudStatus, developerControl, dishes, reportCloudResult, shop, spinRewards]);
 
   const handleSignInGoogle = useCallback(async () => {
     try {
