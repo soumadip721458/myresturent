@@ -26,8 +26,16 @@ export const STORAGE_KEYS = {
 export const BASE_HISTORICAL_REVIEW_COUNT = 124;
 export const BASE_HISTORICAL_RATING_SUM = 607.6; // 124 * 4.9 => starts at 4.9 across 128 reviews with 4 seed cards
 
+export const LEGACY_DEFAULT_SHOP_NAMES = [
+  'রয়েল বিরিয়ানি ও ফাস্ট ফুড',
+  'রয়েল বিরিয়ানি ও ফাস্ট ফুড',
+  'Royal Biryani & Fast Food',
+] as const;
+
 export const DEFAULT_SHOP_CONFIG: ShopConfig = {
-  name: 'রয়েল বিরিয়ানি ও ফাস্ট ফুড',
+  name: 'আপ্যায়ন',
+  nameEn: 'Appayon',
+  subtitle: 'আপ্যায়ন রেস্টুরেন্ট ও ফাস্ট ফুড • Appayon Restaurant & Fast Food',
   address: 'বাজার মোড়, মেইন রোড',
   rating: '৪.৯',
   statusText: 'এখন গরম খাবার তৈরি হচ্ছে • ৩০ মিনিটে ডেলিভারি',
@@ -211,15 +219,33 @@ export const LIVE_WINNERS_TICKER: string[] = [
   '🎉 কৌশিক পাল জিতলেন ১০% ছাড়!',
 ];
 
+export function normalizeShopBranding(raw: Partial<ShopConfig>): ShopConfig {
+  const merged: ShopConfig = {
+    ...DEFAULT_SHOP_CONFIG,
+    ...raw,
+  };
+  const trimmedName = (merged.name || '').trim();
+  const isLegacyName = (LEGACY_DEFAULT_SHOP_NAMES as readonly string[]).includes(
+    trimmedName
+  );
+  if (!trimmedName || isLegacyName) {
+    merged.name = DEFAULT_SHOP_CONFIG.name;
+    if (!raw.nameEn || (LEGACY_DEFAULT_SHOP_NAMES as readonly string[]).includes(raw.nameEn.trim())) {
+      merged.nameEn = DEFAULT_SHOP_CONFIG.nameEn;
+    }
+  }
+  if (!merged.subtitle || !merged.subtitle.trim()) {
+    merged.subtitle = DEFAULT_SHOP_CONFIG.subtitle;
+  }
+  return merged;
+}
+
 export function loadShopConfig(): ShopConfig {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.SHOP);
     if (!raw) return DEFAULT_SHOP_CONFIG;
     const parsed = JSON.parse(raw) as Partial<ShopConfig>;
-    return {
-      ...DEFAULT_SHOP_CONFIG,
-      ...parsed,
-    };
+    return normalizeShopBranding(parsed);
   } catch {
     return DEFAULT_SHOP_CONFIG;
   }

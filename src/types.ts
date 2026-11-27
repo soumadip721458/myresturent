@@ -24,6 +24,8 @@ export type ExtraChargeType = 'percentage' | 'flat';
 
 export interface ShopConfig {
   name: string;
+  nameEn?: string;
+  subtitle?: string;
   address: string;
   rating: string;
   statusText: string;

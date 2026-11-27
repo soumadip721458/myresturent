@@ -91,7 +91,7 @@ export function TableQrCard({ shop, onNotify }: TableQrCardProps) {
   );
 
   const liveUrl =
-    typeof window !== 'undefined' ? window.location.origin : 'https://royalbiryani.app';
+    typeof window !== 'undefined' ? window.location.origin : 'https://appayon.app';
 
   useEffect(() => {
     let cancelled = false;
@@ -309,13 +309,13 @@ export function TableQrCard({ shop, onNotify }: TableQrCardProps) {
       const posterDataUrl = canvas.toDataURL('image/png');
       triggerDownload(
         posterDataUrl,
-        'royal-biryani-table-qr.png',
+        'appayon-table-qr.png',
         'টেবিল QR পোস্টার গ্যালারিতে ডাউনলোড হয়েছে!'
       );
     } catch {
       triggerDownload(
         qrDataUrl,
-        'royal-biryani-qr.png',
+        'appayon-qr.png',
         'QR কোড ডাউনলোড হয়েছে!'
       );
     } finally {
@@ -408,7 +408,7 @@ export function TableQrCard({ shop, onNotify }: TableQrCardProps) {
             onClick={() => {
               triggerDownload(
                 qrDataUrl,
-                'royal-biryani-qr-only.png',
+                'appayon-qr-only.png',
                 'শুধু QR কোড ছবি ডাউনলোড হয়েছে!'
               );
             }}

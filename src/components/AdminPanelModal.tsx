@@ -258,6 +258,9 @@ export function AdminPanelModal({
 
     return {
       name: draft.name.trim() || DEFAULT_SHOP_CONFIG.name,
+      nameEn: draft.nameEn?.trim() || DEFAULT_SHOP_CONFIG.nameEn || 'Appayon',
+      subtitle:
+        draft.subtitle?.trim() || DEFAULT_SHOP_CONFIG.subtitle || '',
       address: draft.address.trim() || DEFAULT_SHOP_CONFIG.address,
       rating: draft.rating.trim() || DEFAULT_SHOP_CONFIG.rating,
       statusText: draft.statusText.trim() || DEFAULT_SHOP_CONFIG.statusText,
@@ -831,11 +834,11 @@ export function AdminPanelModal({
                     </div>
                   </div>
 
-                  {/* Restaurant Name & Address */}
+                  {/* Restaurant Name (BN & EN) */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                     <div>
                       <label className="block text-sm font-semibold text-[#1d1e2c] mb-1">
-                        দোকানের নাম
+                        দোকানের নাম (বাংলা)
                       </label>
                       <input
                         type="text"
@@ -846,6 +849,45 @@ export function AdminPanelModal({
                             name: e.target.value,
                           }))
                         }
+                        className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 text-sm bg-[#f9fafb] focus:bg-white focus:border-[#d90429] focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-semibold text-[#1d1e2c] mb-1">
+                        দোকানের নাম (English)
+                      </label>
+                      <input
+                        type="text"
+                        value={shopDraft.nameEn ?? ''}
+                        onChange={(e) =>
+                          setShopDraft((prev) => ({
+                            ...prev,
+                            nameEn: e.target.value,
+                          }))
+                        }
+                        placeholder="Appayon"
+                        className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 text-sm bg-[#f9fafb] focus:bg-white focus:border-[#d90429] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Subtitle / Tagline & Address */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                    <div>
+                      <label className="block text-sm font-semibold text-[#1d1e2c] mb-1">
+                        সাবটাইটেল / ট্যাগলাইন
+                      </label>
+                      <input
+                        type="text"
+                        value={shopDraft.subtitle ?? ''}
+                        onChange={(e) =>
+                          setShopDraft((prev) => ({
+                            ...prev,
+                            subtitle: e.target.value,
+                          }))
+                        }
+                        placeholder="আপ্যায়ন রেস্টুরেন্ট ও ফাস্ট ফুড • Appayon Restaurant & Fast Food"
                         className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-200 text-sm bg-[#f9fafb] focus:bg-white focus:border-[#d90429] focus:outline-none"
                       />
                     </div>

@@ -78,6 +78,8 @@ service cloud.firestore {
         ]) &&
         cfg.keys().hasOnly([
           'name',
+          'nameEn',
+          'subtitle',
           'address',
           'rating',
           'statusText',
@@ -93,6 +95,8 @@ service cloud.firestore {
           'maxDeliveryKm'
         ]) &&
         cfg.name is string && cfg.name.size() >= 1 && cfg.name.size() <= 120 &&
+        (!('nameEn' in cfg) || (cfg.nameEn is string && cfg.nameEn.size() <= 120)) &&
+        (!('subtitle' in cfg) || (cfg.subtitle is string && cfg.subtitle.size() <= 180)) &&
         cfg.address is string && cfg.address.size() >= 1 && cfg.address.size() <= 240 &&
         cfg.rating is string && cfg.rating.size() >= 1 && cfg.rating.size() <= 20 &&
         cfg.statusText is string && cfg.statusText.size() >= 1 && cfg.statusText.size() <= 180 &&

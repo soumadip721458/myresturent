@@ -1,6 +1,6 @@
 {
-  "name": "রয়েল বিরিয়ানি ও ফাস্ট ফুড — Royal Biryani & Fast Food",
-  "description": "রয়েল বিরিয়ানি ও ফাস্ট ফুড-এর ডিজিটাল মেনু, স্পিন অ্যান্ড উইন অফার এবং দ্রুত হোয়াটসঅ্যাপ ফুড অর্ডারিং অ্যাপ।",
+  "name": "আপ্যায়ন (Appayon) — সেরা বিরিয়ানি ও ফাস্ট ফুড",
+  "description": "আপ্যায়ন রেস্টুরেন্ট ও ফাস্ট ফুড (Appayon Restaurant & Fast Food)-এর ডিজিটাল মেনু, স্পিন অ্যান্ড উইন অফার এবং দ্রুত হোয়াটসঅ্যাপ অনলাইন ফুড অর্ডারিং অ্যাপ।",
   "requestFramePermissions": ["geolocation"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

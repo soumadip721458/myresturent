@@ -150,11 +150,16 @@ export function HeroHeader({
             </div>
           </div>
 
-          {/* Restaurant Title & Location Metadata */}
+          {/* Restaurant Title, Tagline & Location Metadata */}
           <div className="max-w-2xl">
             <h1 className="text-3xl sm:text-4xl lg:text-[42px] font-bold text-white leading-tight tracking-tight [text-wrap:balance] drop-shadow-sm">
               {shopCopy.name}
             </h1>
+            {shopCopy.subtitle && (
+              <p className="mt-1 text-sm sm:text-base font-semibold text-[#ffd166]/95 tracking-tight">
+                {shopCopy.subtitle}
+              </p>
+            )}
 
             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm sm:text-base text-white/90 font-medium">
               <span className="inline-flex items-center gap-1.5">

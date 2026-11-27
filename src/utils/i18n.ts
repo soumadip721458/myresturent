@@ -83,9 +83,16 @@ export function getDishCopy(
 }
 
 export function getShopCopy(shop: ShopConfig, lang: Language) {
+  const subtitle = (
+    shop.subtitle?.trim() ||
+    DEFAULT_SHOP_CONFIG.subtitle ||
+    ''
+  ).trim();
+
   if (lang === 'bn') {
     return {
       name: shop.name,
+      subtitle,
       address: shop.address,
       rating: shop.rating,
       statusText: shop.statusText,
@@ -96,9 +103,8 @@ export function getShopCopy(shop: ShopConfig, lang: Language) {
   }
 
   const name =
-    shop.name.trim() === DEFAULT_SHOP_CONFIG.name
-      ? 'Royal Biryani & Fast Food'
-      : shop.name;
+    shop.nameEn?.trim() ||
+    (shop.name.trim() === DEFAULT_SHOP_CONFIG.name ? 'Appayon' : shop.name);
 
   const address =
     shop.address.trim() === DEFAULT_SHOP_CONFIG.address
@@ -128,6 +134,7 @@ export function getShopCopy(shop: ShopConfig, lang: Language) {
 
   return {
     name,
+    subtitle,
     address,
     rating,
     statusText,

@@ -31,6 +31,7 @@ import {
   DEFAULT_MENU,
   DEFAULT_SHOP_CONFIG,
   SPIN_SLICES,
+  normalizeShopBranding,
 } from './data/defaults';
 import type {
   CloudOrder,
@@ -234,6 +235,12 @@ function sanitizeShopConfig(input: ShopConfig): ShopConfig {
 
   return {
     name: (input.name || DEFAULT_SHOP_CONFIG.name).trim().slice(0, 120),
+    nameEn: (input.nameEn || DEFAULT_SHOP_CONFIG.nameEn || 'Appayon')
+      .trim()
+      .slice(0, 120),
+    subtitle: (input.subtitle || DEFAULT_SHOP_CONFIG.subtitle || '')
+      .trim()
+      .slice(0, 180),
     address: (input.address || DEFAULT_SHOP_CONFIG.address).trim().slice(0, 240),
     rating: (input.rating || DEFAULT_SHOP_CONFIG.rating).trim().slice(0, 20),
     statusText: (input.statusText || DEFAULT_SHOP_CONFIG.statusText)
@@ -356,10 +363,7 @@ export function subscribeToShopTenant(
       const parsed: Partial<ShopTenantDocument> = {};
 
       if (raw.shopConfig && typeof raw.shopConfig === 'object') {
-        parsed.shopConfig = {
-          ...DEFAULT_SHOP_CONFIG,
-          ...raw.shopConfig,
-        };
+        parsed.shopConfig = normalizeShopBranding(raw.shopConfig);
       }
       if (Array.isArray(raw.menuItems) && raw.menuItems.length > 0) {
         parsed.menuItems = (raw.menuItems as Dish[]).map((d) => ({
