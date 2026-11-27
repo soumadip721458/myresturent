@@ -518,9 +518,12 @@ export default function App() {
   );
 
   const reportCloudResult = useCallback(
-    (result: CloudWriteResult) => {
+    (result: CloudWriteResult, customSuccessMessage?: string) => {
       if (result.synced) {
-        notify('✅ ক্লাউডে সেভ হয়েছে — সব ফোনে আপডেট হয়েছে!');
+        notify(
+          customSuccessMessage ||
+            '✅ ক্লাউডে সেভ হয়েছে — সব ফোনে আপডেট হয়েছে!'
+        );
       } else if (result.reason === 'not_configured') {
         notify('স্থানীয়ভাবে সেভ হয়েছে (Firebase কনফিগার করা নেই)');
       } else {
@@ -623,7 +626,10 @@ export default function App() {
           developerControl: nextControl,
         }
       );
-      reportCloudResult(res);
+      reportCloudResult(
+        res,
+        '✅ ডেভেলপার সেটিংস ক্লাউডে সেভ হয়েছে — সব ফোনে আপডেট হয়েছে!'
+      );
       return res;
     },
     [dishes, reportCloudResult, shop, spinRewards]
@@ -644,7 +650,10 @@ export default function App() {
         developerControl,
       }
     );
-    reportCloudResult(res);
+    reportCloudResult(
+      res,
+      '✅ ডেভেলপার সেটিংস ক্লাউডে সেভ হয়েছে — সব ফোনে আপডেট হয়েছে!'
+    );
     return res;
   }, [developerControl, dishes, reportCloudResult, shop, spinRewards]);
 

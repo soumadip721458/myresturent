@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react';
 import type { User } from 'firebase/auth';
 import {
+  AlertCircle,
   CalendarClock,
   Check,
+  CheckCircle2,
   Cloud,
   CloudOff,
+  Loader2,
   LogIn,
   LogOut,
   Power,
@@ -64,6 +67,11 @@ export function DeveloperControlModal({
   const [saving, setSaving] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
+  const [cloudFeedback, setCloudFeedback] = useState<{
+    type: 'saving' | 'success' | 'error';
+    message: string;
+    detail?: string;
+  } | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -71,10 +79,32 @@ export function DeveloperControlModal({
     }
   }, [isOpen, developerControl]);
 
+  useEffect(() => {
+    if (!isOpen) {
+      setCloudFeedback(null);
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   const todayKey = getTodayKey();
   const previewBlockState = isSubscriptionBlocked(draft, todayKey);
+
+  const applyCloudResult = (res: CloudWriteResult | void) => {
+    if (res && res.synced) {
+      setCloudFeedback({
+        type: 'success',
+        message:
+          '✅ ডেভেলপার সেটিংস ক্লাউডে সেভ হয়েছে — সব ফোনে আপডেট হয়েছে!',
+      });
+    } else if (res) {
+      setCloudFeedback({
+        type: 'error',
+        message: '⚠️ Firestore ক্লাউডে সেভ ব্যর্থ হয়েছে (লোকাল সেভ আছে)',
+        detail: res.errorMessage || res.reason || 'Unknown Firestore error',
+      });
+    }
+  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -96,8 +126,20 @@ export function DeveloperControlModal({
     };
 
     setSaving(true);
+    setCloudFeedback({
+      type: 'saving',
+      message: '☁️ ডেভেলপার সেটিংস Firestore ক্লাউডে সেভ হচ্ছে...',
+    });
     try {
-      await onSaveDeveloperControl(cleaned);
+      const res = await onSaveDeveloperControl(cleaned);
+      applyCloudResult(res);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      setCloudFeedback({
+        type: 'error',
+        message: '⚠️ Firestore ক্লাউডে সেভ ব্যর্থ হয়েছে',
+        detail,
+      });
     } finally {
       setSaving(false);
     }
@@ -123,8 +165,20 @@ export function DeveloperControlModal({
 
   const handlePushAll = async () => {
     setPushing(true);
+    setCloudFeedback({
+      type: 'saving',
+      message: '☁️ সব ডেটা Firestore ক্লাউডে পাবলিশ হচ্ছে...',
+    });
     try {
-      await onPushAllToCloud();
+      const res = await onPushAllToCloud();
+      applyCloudResult(res);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      setCloudFeedback({
+        type: 'error',
+        message: '⚠️ Firestore ক্লাউডে পাবলিশ ব্যর্থ হয়েছে',
+        detail,
+      });
     } finally {
       setPushing(false);
     }
@@ -167,6 +221,49 @@ export function DeveloperControlModal({
           </button>
         </div>
 
+        {/* Explicit Firestore Cloud Save Status Banner */}
+        {cloudFeedback && (
+          <div
+            role={cloudFeedback.type === 'error' ? 'alert' : 'status'}
+            aria-live="polite"
+            className={`px-4 py-3 border-b text-xs sm:text-sm font-bold flex items-start justify-between gap-2 shrink-0 ${
+              cloudFeedback.type === 'success'
+                ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-500/40 text-emerald-900 dark:text-emerald-200'
+                : cloudFeedback.type === 'error'
+                ? 'bg-red-50 dark:bg-red-950/60 border-red-200 dark:border-red-500/40 text-[#b30322] dark:text-red-200'
+                : 'bg-amber-50 dark:bg-amber-950/50 border-amber-200 dark:border-amber-500/35 text-amber-900 dark:text-amber-200'
+            }`}
+          >
+            <div className="flex items-start gap-2 min-w-0">
+              {cloudFeedback.type === 'saving' ? (
+                <Loader2 className="w-4 h-4 animate-spin shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+              ) : cloudFeedback.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
+              ) : (
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-[#d90429] dark:text-red-400" />
+              )}
+              <div className="min-w-0">
+                <p className="leading-snug">{cloudFeedback.message}</p>
+                {cloudFeedback.detail && (
+                  <p className="mt-1 font-mono text-[11px] font-medium opacity-90 break-all">
+                    Error: {cloudFeedback.detail}
+                  </p>
+                )}
+              </div>
+            </div>
+            {cloudFeedback.type !== 'saving' && (
+              <button
+                type="button"
+                onClick={() => setCloudFeedback(null)}
+                aria-label="বিজ্ঞপ্তি বন্ধ করুন"
+                className="p-1 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 shrink-0 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Scrollable Content */}
         <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-5">
           {/* Firebase Cloud Sync Banner */}
@@ -181,8 +278,8 @@ export function DeveloperControlModal({
                 <span className="text-xs font-bold text-[#1d1e2c] dark:text-slate-100">
                   {isFirebaseConfigured
                     ? adminUser
-                      ? `Cloud Sync সক্রিয় (${adminUser.email})`
-                      : 'রিয়েল-টাইম ক্লাউড আপডেটের জন্য Google লগইন করুন'
+                      ? `☁️ Cloud Sync সক্রিয় (${adminUser.email})`
+                      : `☁️ Direct Cloud Sync সক্রিয় (shops/${SHOP_ID}) — মোবাইল ও Vercel থেকে সরাসরি সেভ হবে`
                     : 'LocalStorage Fallback Mode (Firebase প্লেসহোল্ডার কী)'}
                 </span>
               </div>
@@ -206,19 +303,23 @@ export function DeveloperControlModal({
                     className="px-3 py-1.5 rounded-lg bg-[#1d1e2c] dark:bg-[#ff9f1c] text-white dark:text-[#1d1e2c] text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
                   >
                     <LogIn className="w-3.5 h-3.5" />
-                    <span>{authBusy ? 'লগইন হচ্ছে...' : 'Google Sign-In'}</span>
+                    <span>{authBusy ? 'লগইন হচ্ছে...' : 'Google Sign-In (ঐচ্ছিক)'}</span>
                   </button>
                 ))}
             </div>
 
-            {isFirebaseConfigured && adminUser && (
+            {isFirebaseConfigured && (
               <button
                 type="button"
-                disabled={pushing}
+                disabled={pushing || saving}
                 onClick={handlePushAll}
-                className="w-full min-h-[38px] px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                className="w-full min-h-[38px] px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
               >
-                <UploadCloud className="w-4 h-4" />
+                {pushing ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <UploadCloud className="w-4 h-4" />
+                )}
                 <span>
                   {pushing
                     ? 'সিঙ্ক হচ্ছে...'

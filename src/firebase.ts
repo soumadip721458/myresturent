@@ -395,8 +395,8 @@ export interface CloudWriteResult {
 /**
  * Writes partial or full shop tenant state to Firestore `shops/{SHOP_ID}`.
  * Works reliably on external Vercel domains & mobile browsers even when Google Sign-In popup
- * is unavailable: shopConfig, menuItems, and spinRewards sync directly with full schema validation,
- * while developerControl updates still require verified developer authentication in Firestore rules.
+ * is unavailable: shopConfig, menuItems, spinRewards, and developerControl sync directly via
+ * `setDoc(..., { merge: true })` with full schema validation enforced in `firestore.rules`.
  */
 export async function syncShopTenantToCloud(
   patch: Partial<{
@@ -417,16 +417,6 @@ export async function syncShopTenantToCloud(
       synced: false,
       reason: 'not_configured',
       errorMessage: 'Firebase is not configured (using LocalStorage fallback).',
-    };
-  }
-
-  // Developer subscription control writes strictly require Google Developer Auth
-  if (patch.developerControl && !auth?.currentUser) {
-    return {
-      synced: false,
-      reason: 'auth_required',
-      errorMessage:
-        'Developer Control updates require verified Google Sign-In.',
     };
   }
 
@@ -491,6 +481,16 @@ export async function syncShopTenantToCloud(
       updatePayload.developerControl = sanitizeDeveloperControl(
         patch.developerControl
       );
+    } else if (
+      !existingData.developerControl ||
+      typeof existingData.developerControl.serviceActive !== 'boolean' ||
+      typeof existingData.developerControl.subscriptionExpiry !== 'string'
+    ) {
+      updatePayload.developerControl = sanitizeDeveloperControl({
+        ...DEFAULT_DEVELOPER_CONTROL,
+        ...(existingData.developerControl ?? {}),
+        ...fullSnapshot.developerControl,
+      });
     }
 
     await setDoc(shopRef, updatePayload, { merge: true });
